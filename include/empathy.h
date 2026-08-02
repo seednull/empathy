@@ -39,6 +39,9 @@ extern "C" {
 
 // Opaque handles
 EMPATHY_DEFINE_HANDLE(Empathy_Instance);
+EMPATHY_DEFINE_HANDLE(Empathy_ProgramLayout);
+EMPATHY_DEFINE_HANDLE(Empathy_Program);
+EMPATHY_DEFINE_HANDLE(Empathy_Machine);
 
 // Enums
 typedef enum Empathy_Result_t
@@ -48,9 +51,39 @@ typedef enum Empathy_Result_t
 	EMPATHY_INVALID_INSTANCE,
 	EMPATHY_INVALID_OUTPUT_ARGUMENT,
 
+	// FIXME: add more error codes for internal errors
+	EMPATHY_INTERNAL_ERROR,
+
 	EMPATHY_RESULT_ENUM_MAX,
 	EMPATHY_RESULT_ENUM_FORCE32 = 0x7FFFFFFF,
 } Empathy_Result;
+
+typedef enum Empathy_ValueType_t
+{
+	EMPATHY_VALUE_TYPE_NULL = 0,
+	EMPATHY_VALUE_TYPE_UINT8,
+	EMPATHY_VALUE_TYPE_UINT16,
+	EMPATHY_VALUE_TYPE_UINT32,
+	EMPATHY_VALUE_TYPE_UINT64,
+	EMPATHY_VALUE_TYPE_INT8,
+	EMPATHY_VALUE_TYPE_INT16,
+	EMPATHY_VALUE_TYPE_INT32,
+	EMPATHY_VALUE_TYPE_INT64,
+	EMPATHY_VALUE_TYPE_FLOAT32,
+	EMPATHY_VALUE_TYPE_FLOAT64,
+
+	EMPATHY_VALUE_TYPE_ENUM_MAX,
+	EMPATHY_VALUE_TYPE_ENUM_FORCE32 = 0x7FFFFFFF,
+} Empathy_ValueType;
+
+typedef enum Empathy_ParameterAccessFlags_t
+{
+	EMPATHY_PARAMETER_ACCESS_FLAGS_READ = 0x00000001,
+	EMPATHY_PARAMETER_ACCESS_FLAGS_WRITE = 0x00000002,
+	EMPATHY_PARAMETER_ACCESS_FLAGS_READWRITE = 0x00000003,
+
+	EMPATHY_PARAMETER_ACCESS_FLAGS_ENUM_FORCE32 = 0x7FFFFFFF,
+} Empathy_ParameterAccessFlags;
 
 // Structs
 typedef struct Empathy_InstanceDesc_t
@@ -60,11 +93,96 @@ typedef struct Empathy_InstanceDesc_t
 	// TOOD: flags?
 } Empathy_InstanceDesc;
 
+typedef union Empathy_ValueData_t
+{
+	uint8_t u8_value;
+	uint16_t u16_value;
+	uint32_t u32_value;
+	uint64_t u64_value;
+	int8_t i8_value;
+	int16_t i16_value;
+	int32_t i32_value;
+	int64_t i64_value;
+	float f32_value;
+	double f64_value;
+} Empathy_ValueData;
+
+typedef struct Empathy_Value
+{
+	Empathy_ValueType type;
+	Empathy_ValueData data;
+} Empathy_Value;
+
+typedef struct Empathy_ParameterDesc_t
+{
+	uint64_t index;
+
+	Empathy_ValueType type;
+	Empathy_ParameterAccessFlags access;
+
+	uint64_t offset;
+} Empathy_ParameterDesc;
+
+typedef struct Empathy_ParameterTableDesc_t
+{
+	uint64_t binding;
+
+	uint64_t num_parameters;
+	const Empathy_ParameterDesc *parameters;
+} Empathy_ParameterTableDesc;
+
+typedef struct Empathy_CommandDesc
+{
+	uint64_t index;
+
+	uint64_t num_arguments;
+	const Empathy_ValueType *argument_types;
+
+	Empathy_ValueType result_type;
+} Empathy_CommandDesc;
+
+typedef struct Empathy_ProgramLayoutDesc_t
+{
+	uint64_t num_tables;
+	const Empathy_ParameterTableDesc *tables;
+
+	uint64_t num_commands;
+	const Empathy_CommandDesc *commands;
+} Empathy_ProgramLayoutDesc;
+
+typedef struct Empathy_ProgramDesc_t
+{
+	Empathy_ProgramLayout layout;
+	const void *data;
+	uint64_t size;
+} Empathy_ProgramDesc;
+
+typedef struct Empathy_MachineDesc_t
+{
+	uint64_t execution_stack_size;
+	uint64_t predicate_stack_size;
+	uint64_t max_parameter_tables;
+} Empathy_MachineDesc;
+
 // Function pointers
+typedef Empathy_Result (*PFN_empathyCreateProgramLayout)(Empathy_Instance instance, const Empathy_ProgramLayoutDesc *desc, Empathy_ProgramLayout *layout);
+typedef Empathy_Result (*PFN_empathyCreateProgram)(Empathy_Instance instance, const Empathy_ProgramDesc *desc, Empathy_Program *program);
+typedef Empathy_Result (*PFN_empathyCreateMachine)(Empathy_Instance instance, const Empathy_MachineDesc *desc, Empathy_Machine *machine);
+
+typedef Empathy_Result (*PFN_empathyDestroyProgramLayout)(Empathy_Instance instance, Empathy_ProgramLayout layout);
+typedef Empathy_Result (*PFN_empathyDestroyProgram)(Empathy_Instance instance, Empathy_Program program);
+typedef Empathy_Result (*PFN_empathyDestroyMachine)(Empathy_Instance instance, Empathy_Machine machine);
 typedef Empathy_Result (*PFN_empathyDestroyInstance)(Empathy_Instance instance);
 
 typedef struct Empathy_InstanceTable_t
 {
+	PFN_empathyCreateProgramLayout createProgramLayout;
+	PFN_empathyCreateProgram createProgram;
+	PFN_empathyCreateMachine createMachine;
+
+	PFN_empathyDestroyProgramLayout destroyProgramLayout;
+	PFN_empathyDestroyProgram destroyProgram;
+	PFN_empathyDestroyMachine destroyMachine;
 	PFN_empathyDestroyInstance destroyInstance;
 } Empathy_InstanceTable;
 
@@ -73,6 +191,13 @@ typedef struct Empathy_InstanceTable_t
 EMPATHY_APIENTRY Empathy_Result empathyCreateInstance(const Empathy_InstanceDesc *desc, Empathy_Instance* instance);
 EMPATHY_APIENTRY Empathy_Result empathyGetInstanceTable(Empathy_Instance instance, Empathy_InstanceTable *instance_table);
 
+EMPATHY_APIENTRY Empathy_Result empathyCreateProgramLayout(Empathy_Instance instance, const Empathy_ProgramLayoutDesc *desc, Empathy_ProgramLayout *layout);
+EMPATHY_APIENTRY Empathy_Result empathyCreateProgram(Empathy_Instance instance, const Empathy_ProgramDesc *desc, Empathy_Program *program);
+EMPATHY_APIENTRY Empathy_Result empathyCreateMachine(Empathy_Instance instance, const Empathy_MachineDesc *desc, Empathy_Machine *machine);
+
+EMPATHY_APIENTRY Empathy_Result empathyDestroyProgramLayout(Empathy_Instance instance, Empathy_ProgramLayout layout);
+EMPATHY_APIENTRY Empathy_Result empathyDestroyProgram(Empathy_Instance instance, Empathy_Program program);
+EMPATHY_APIENTRY Empathy_Result empathyDestroyMachine(Empathy_Instance instance, Empathy_Machine machine);
 EMPATHY_APIENTRY Empathy_Result empathyDestroyInstance(Empathy_Instance instance);
 #endif
 
