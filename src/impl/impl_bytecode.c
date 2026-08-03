@@ -200,7 +200,7 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 		{
 			case IMPL_OPCODE_PUSH_U8:
 			{
-				if (head + 1 == size)
+				if (head >= size)
 					return EMPATHY_EXECUTION_STACK_OVERFLOW;
 
 				uint8_t data = *(const uint8_t *)instruction_data;
@@ -215,7 +215,7 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 			
 			case IMPL_OPCODE_PUSH_U16:
 			{
-				if (head + 1 == size)
+				if (head >= size)
 					return EMPATHY_EXECUTION_STACK_OVERFLOW;
 
 					uint16_t data = *(const uint16_t *)instruction_data;
@@ -230,7 +230,7 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 
 			case IMPL_OPCODE_PUSH_U32:
 			{
-				if (head + 1 == size)
+				if (head >= size)
 					return EMPATHY_EXECUTION_STACK_OVERFLOW;
 
 				uint32_t data = *(const uint32_t *)instruction_data;
@@ -247,7 +247,7 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 
 			case IMPL_OPCODE_PUSH_U64:
 			{
-				if (head + 1 == size)
+				if (head >= size)
 					return EMPATHY_EXECUTION_STACK_OVERFLOW;
 
 				uint64_t data = *(const uint64_t *)instruction_data;
@@ -262,7 +262,7 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 
 			case IMPL_OPCODE_PUSH_I8:
 			{
-				if (head + 1 == size)
+				if (head >= size)
 					return EMPATHY_EXECUTION_STACK_OVERFLOW;
 
 				int8_t data = *(const int8_t *)instruction_data;
@@ -277,7 +277,7 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 
 			case IMPL_OPCODE_PUSH_I16:
 			{
-				if (head + 1 == size)
+				if (head >= size)
 					return EMPATHY_EXECUTION_STACK_OVERFLOW;
 
 				int16_t data = *(const int16_t *)instruction_data;
@@ -292,7 +292,7 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 
 			case IMPL_OPCODE_PUSH_I32:
 			{
-				if (head + 1 == size)
+				if (head >= size)
 					return EMPATHY_EXECUTION_STACK_OVERFLOW;
 
 				int32_t data = *(const int32_t *)instruction_data;
@@ -307,7 +307,7 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 
 			case IMPL_OPCODE_PUSH_I64:
 			{
-				if (head + 1 == size)
+				if (head >= size)
 					return EMPATHY_EXECUTION_STACK_OVERFLOW;
 
 				int64_t data = *(const int64_t *)instruction_data;
@@ -322,7 +322,7 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 
 			case IMPL_OPCODE_PUSH_F32:
 			{
-				if (head + 1 == size)
+				if (head >= size)
 					return EMPATHY_EXECUTION_STACK_OVERFLOW;
 
 				float data = *(const float *)instruction_data;
@@ -337,7 +337,7 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 
 			case IMPL_OPCODE_PUSH_F64:
 			{
-				if (head + 1 == size)
+				if (head >= size)
 					return EMPATHY_EXECUTION_STACK_OVERFLOW;
 
 				double data = *(const double *)instruction_data;
@@ -352,7 +352,7 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 
 			case IMPL_OPCODE_PUSH_ATOM:
 			{
-				if (head + 1 == size)
+				if (head >= size)
 					return EMPATHY_EXECUTION_STACK_OVERFLOW;
 
 				Empathy_Atom data = *(const Empathy_Atom *)instruction_data;
@@ -367,7 +367,7 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 
 			case IMPL_OPCODE_LOAD:
 			{
-				if (head + 1 == size)
+				if (head >= size)
 					return EMPATHY_EXECUTION_STACK_OVERFLOW;
 
 				Impl_InstructionDataAddress address = *(const Impl_InstructionDataAddress *)instruction_data;
@@ -507,7 +507,7 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 
 			case IMPL_OPCODE_DUP:
 			{
-				if (head + 1 == size)
+				if (head >= size)
 					return EMPATHY_EXECUTION_STACK_OVERFLOW;
 
 				Empathy_Value value = stack[head];
