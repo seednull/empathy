@@ -194,12 +194,13 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 			return EMPATHY_INVALID_INSTRUCTION_OPCODE;
 
 		uint64_t head = machine->execution_stack.head;
+		const uint8_t *instruction_data = bytes + instruction_pointer + 1;
 
 		switch (opcode)
 		{
 			case IMPL_OPCODE_PUSH_U8:
 			{
-				uint8_t data = *(const uint8_t *)(bytes + instruction_pointer + 1);
+				uint8_t data = *(const uint8_t *)instruction_data;
 
 				Empathy_Value value = {0};
 				value.type.base_type = EMPATHY_VALUE_BASE_TYPE_UINT8;
@@ -214,7 +215,7 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 			
 			case IMPL_OPCODE_PUSH_U16:
 			{
-				uint16_t data = *(const uint16_t *)(bytes + instruction_pointer + 1);
+				uint16_t data = *(const uint16_t *)instruction_data;
 
 				Empathy_Value value = {0};
 				value.type.base_type = EMPATHY_VALUE_BASE_TYPE_UINT16;
@@ -229,7 +230,7 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 
 			case IMPL_OPCODE_PUSH_U32:
 			{
-				uint32_t data = *(const uint32_t *)(bytes + instruction_pointer + 1);
+				uint32_t data = *(const uint32_t *)instruction_data;
 
 				Empathy_Value value = {0};
 				value.type.base_type = EMPATHY_VALUE_BASE_TYPE_UINT32;
@@ -245,7 +246,7 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 
 			case IMPL_OPCODE_PUSH_U64:
 			{
-				uint64_t data = *(const uint64_t *)(bytes + instruction_pointer + 1);
+				uint64_t data = *(const uint64_t *)instruction_data;
 
 				Empathy_Value value = {0};
 				value.type.base_type = EMPATHY_VALUE_BASE_TYPE_UINT64;
@@ -260,7 +261,7 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 
 			case IMPL_OPCODE_PUSH_I8:
 			{
-				int8_t data = *(const int8_t *)(bytes + instruction_pointer + 1);
+				int8_t data = *(const int8_t *)instruction_data;
 
 				Empathy_Value value = {0};
 				value.type.base_type = EMPATHY_VALUE_BASE_TYPE_INT8;
@@ -275,7 +276,7 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 
 			case IMPL_OPCODE_PUSH_I16:
 			{
-				int16_t data = *(const int16_t *)(bytes + instruction_pointer + 1);
+				int16_t data = *(const int16_t *)instruction_data;
 
 				Empathy_Value value = {0};
 				value.type.base_type = EMPATHY_VALUE_BASE_TYPE_INT16;
@@ -290,7 +291,7 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 
 			case IMPL_OPCODE_PUSH_I32:
 			{
-				int32_t data = *(const int32_t *)(bytes + instruction_pointer + 1);
+				int32_t data = *(const int32_t *)instruction_data;
 
 				Empathy_Value value = {0};
 				value.type.base_type = EMPATHY_VALUE_BASE_TYPE_INT32;
@@ -305,7 +306,7 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 
 			case IMPL_OPCODE_PUSH_I64:
 			{
-				int64_t data = *(const int64_t *)(bytes + instruction_pointer + 1);
+				int64_t data = *(const int64_t *)instruction_data;
 
 				Empathy_Value value = {0};
 				value.type.base_type = EMPATHY_VALUE_BASE_TYPE_INT64;
@@ -320,7 +321,7 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 
 			case IMPL_OPCODE_PUSH_F32:
 			{
-				float data = *(const float *)(bytes + instruction_pointer + 1);
+				float data = *(const float *)instruction_data;
 
 				Empathy_Value value = {0};
 				value.type.base_type = EMPATHY_VALUE_BASE_TYPE_FLOAT32;
@@ -335,7 +336,7 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 
 			case IMPL_OPCODE_PUSH_F64:
 			{
-				double data = *(const double *)(bytes + instruction_pointer + 1);
+				double data = *(const double *)instruction_data;
 
 				Empathy_Value value = {0};
 				value.type.base_type = EMPATHY_VALUE_BASE_TYPE_FLOAT64;
@@ -350,7 +351,7 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 
 			case IMPL_OPCODE_PUSH_ATOM:
 			{
-				Empathy_Atom data = *(const Empathy_Atom *)(bytes + instruction_pointer + 1);
+				Empathy_Atom data = *(const Empathy_Atom *)instruction_data;
 
 				Empathy_Value value = {0};
 				value.type = (Empathy_ValueType){EMPATHY_VALUE_BASE_TYPE_ATOM, data.type};
@@ -368,7 +369,7 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 				if (head + 1 == size)
 					return EMPATHY_EXECUTION_STACK_OVERFLOW;
 
-				Impl_InstructionDataAddress address = *(const Impl_InstructionDataAddress *)(bytes + instruction_pointer + 1);
+				Impl_InstructionDataAddress address = *(const Impl_InstructionDataAddress *)instruction_data;
 
 				// TODO: replace this by O(1) hashmap lookup or design better <table; index> mapping to array index
 				const Impl_ProgramLayoutParameter *parameter = NULL;
@@ -425,7 +426,7 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 				if (head == 0)
 					return EMPATHY_EXECUTION_STACK_UNDERFLOW;
 
-				Impl_InstructionDataAddress address = *(const Impl_InstructionDataAddress *)(bytes + instruction_pointer + 1);
+				Impl_InstructionDataAddress address = *(const Impl_InstructionDataAddress *)instruction_data;
 
 				// TODO: replace this by O(1) hashmap lookup or design better <table; index> mapping to array index
 				const Impl_ProgramLayoutParameter *parameter = NULL;
