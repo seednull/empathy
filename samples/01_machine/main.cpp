@@ -92,7 +92,7 @@ void testMachine(Empathy_Instance instance)
 	assert(local_state.time == 0.0f);
 
 	result = empathyRun(instance, machine, 3);
-	assert(result == EMPATHY_SUCCESS);
+	assert(result == EMPATHY_EXECUTION_END);
 
 	assert(local_state.time == world_state.time);
 

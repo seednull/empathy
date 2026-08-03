@@ -895,7 +895,7 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 
 			case IMPL_OPCODE_END:
 			{
-				return EMPATHY_SUCCESS;
+				return EMPATHY_EXECUTION_END;
 			}
 			break;
 		}
