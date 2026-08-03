@@ -58,29 +58,30 @@ typedef enum Empathy_Result_t
 	EMPATHY_RESULT_ENUM_FORCE32 = 0x7FFFFFFF,
 } Empathy_Result;
 
-typedef enum Empathy_ValueType_t
+typedef enum Empathy_ValueBaseType_t
 {
-	EMPATHY_VALUE_TYPE_NULL = 0,
-	EMPATHY_VALUE_TYPE_UINT8,
-	EMPATHY_VALUE_TYPE_UINT16,
-	EMPATHY_VALUE_TYPE_UINT32,
-	EMPATHY_VALUE_TYPE_UINT64,
-	EMPATHY_VALUE_TYPE_INT8,
-	EMPATHY_VALUE_TYPE_INT16,
-	EMPATHY_VALUE_TYPE_INT32,
-	EMPATHY_VALUE_TYPE_INT64,
-	EMPATHY_VALUE_TYPE_FLOAT32,
-	EMPATHY_VALUE_TYPE_FLOAT64,
+	EMPATHY_VALUE_BASE_TYPE_NULL = 0,
+	EMPATHY_VALUE_BASE_TYPE_UINT8,
+	EMPATHY_VALUE_BASE_TYPE_UINT16,
+	EMPATHY_VALUE_BASE_TYPE_UINT32,
+	EMPATHY_VALUE_BASE_TYPE_UINT64,
+	EMPATHY_VALUE_BASE_TYPE_INT8,
+	EMPATHY_VALUE_BASE_TYPE_INT16,
+	EMPATHY_VALUE_BASE_TYPE_INT32,
+	EMPATHY_VALUE_BASE_TYPE_INT64,
+	EMPATHY_VALUE_BASE_TYPE_FLOAT32,
+	EMPATHY_VALUE_BASE_TYPE_FLOAT64,
+	EMPATHY_VALUE_BASE_TYPE_ATOM,
 
-	EMPATHY_VALUE_TYPE_ENUM_MAX,
-	EMPATHY_VALUE_TYPE_ENUM_FORCE32 = 0x7FFFFFFF,
-} Empathy_ValueType;
+	EMPATHY_VALUE_BASE_TYPE_ENUM_MAX,
+	EMPATHY_VALUE_BASE_TYPE_ENUM_FORCE32 = 0x7FFFFFFF,
+} Empathy_ValueBaseType;
 
 typedef enum Empathy_ParameterAccessFlags_t
 {
 	EMPATHY_PARAMETER_ACCESS_FLAGS_READ = 0x00000001,
 	EMPATHY_PARAMETER_ACCESS_FLAGS_WRITE = 0x00000002,
-	EMPATHY_PARAMETER_ACCESS_FLAGS_READWRITE = 0x00000003,
+	EMPATHY_PARAMETER_ACCESS_FLAGS_READ_WRITE = 0x00000003,
 
 	EMPATHY_PARAMETER_ACCESS_FLAGS_ENUM_FORCE32 = 0x7FFFFFFF,
 } Empathy_ParameterAccessFlags;
@@ -92,6 +93,18 @@ typedef struct Empathy_InstanceDesc_t
 	// TODO: allocator context
 	// TOOD: flags?
 } Empathy_InstanceDesc;
+
+typedef struct Empathy_Atom_t
+{
+	uint32_t type;
+	uint32_t value;
+} Empathy_Atom;
+
+typedef struct Empathy_ValueType_t
+{
+	Empathy_ValueBaseType base_type;
+	uint32_t atom_type;
+} Empathy_ValueType;
 
 typedef union Empathy_ValueData_t
 {
@@ -105,6 +118,7 @@ typedef union Empathy_ValueData_t
 	int64_t i64_value;
 	float f32_value;
 	double f64_value;
+	Empathy_Atom atom_value;
 } Empathy_ValueData;
 
 typedef struct Empathy_Value
@@ -112,6 +126,13 @@ typedef struct Empathy_Value
 	Empathy_ValueType type;
 	Empathy_ValueData data;
 } Empathy_Value;
+
+typedef struct Empathy_AtomTypeDesc_t
+{
+	uint32_t type;
+	uint32_t min_value;
+	uint32_t max_value;
+} Empathy_AtomTypeDesc;
 
 typedef struct Empathy_ParameterDesc_t
 {
@@ -131,23 +152,23 @@ typedef struct Empathy_ParameterTableDesc_t
 	const Empathy_ParameterDesc *parameters;
 } Empathy_ParameterTableDesc;
 
-typedef struct Empathy_CommandDesc
+typedef struct Empathy_YieldDesc
 {
-	uint64_t index;
-
+	Empathy_Atom atom;
 	uint64_t num_arguments;
 	const Empathy_ValueType *argument_types;
-
-	Empathy_ValueType result_type;
-} Empathy_CommandDesc;
+} Empathy_YieldDesc;
 
 typedef struct Empathy_ProgramLayoutDesc_t
 {
+	uint64_t num_atom_types;
+	const Empathy_AtomTypeDesc *atom_types;
+
 	uint64_t num_tables;
 	const Empathy_ParameterTableDesc *tables;
 
-	uint64_t num_commands;
-	const Empathy_CommandDesc *commands;
+	uint64_t num_yields;
+	const Empathy_YieldDesc *yields;
 } Empathy_ProgramLayoutDesc;
 
 typedef struct Empathy_ProgramDesc_t

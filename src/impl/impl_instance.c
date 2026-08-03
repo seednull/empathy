@@ -13,9 +13,10 @@ static void impl_destroyProgramLayout(Impl_Instance *instance_ptr, Impl_ProgramL
 
 	EMPATHY_UNUSED(instance_ptr);
 
+	free(program_layout_ptr->atom_types);
 	free(program_layout_ptr->parameters);
-	free(program_layout_ptr->commands);
-	free(program_layout_ptr->command_argument_types);
+	free(program_layout_ptr->yields);
+	free(program_layout_ptr->yield_argument_types);
 };
 
 static void impl_destroyProgram(Impl_Instance *instance_ptr, Impl_Program *program_ptr)
@@ -52,35 +53,21 @@ static Empathy_Result impl_instanceCreateProgramLayout(Empathy_Instance this, co
 
 	Impl_ProgramLayout result = {0};
 
-	if (desc->num_commands > 0)
+	if (desc->num_atom_types > 0)
 	{
-		assert(desc->commands);
+		assert(desc->atom_types);
 
-		uint64_t num_arguments = 0;
-		for (uint64_t i = 0; i < desc->num_commands; ++i)
+		result.num_atom_types = desc->atom_types;
+		result.atom_types = (Impl_ProgramLayoutAtomType *)malloc(sizeof(Impl_ProgramLayoutAtomType) * desc->num_atom_types);
+
+		for (uint64_t i = 0; i < desc->num_atom_types; ++i)
 		{
-			const Empathy_CommandDesc *command = &desc->commands[i];
-			num_arguments += command->num_arguments;
-		}
+			const Empathy_AtomTypeDesc *src_type = &desc->atom_types[i];
+			Impl_ProgramLayoutAtomType *dst_type = &result.atom_types[i];
 
-		result.num_commands = desc->num_commands;
-		result.commands = (Impl_ProgramLayoutCommand *)malloc(sizeof(Impl_ProgramLayoutCommand) * desc->num_commands);
-
-		result.command_argument_types = (Empathy_ValueType *)malloc(sizeof(Empathy_ValueType) * num_arguments);
-
-		uint64_t current_argument = 0;
-		for (uint64_t i = 0; i < desc->num_commands; ++i)
-		{
-			const Empathy_CommandDesc *src_command = &desc->commands[i];
-			Impl_ProgramLayoutCommand *dst_command = &result.commands[i];
-
-			dst_command->index = src_command->index;
-			dst_command->result_type = src_command->result_type;
-			dst_command->num_arguments = src_command->num_arguments;
-			dst_command->base_argument = current_argument;
-
-			for (uint64_t j = 0; j < src_command->num_arguments; ++j)
-				result.command_argument_types[current_argument++] = src_command->argument_types[j];
+			dst_type->type = src_type->type;
+			dst_type->min_value = src_type->min_value;
+			dst_type->max_value = src_type->max_value;
 		}
 	}
 
@@ -119,6 +106,37 @@ static Empathy_Result impl_instanceCreateProgramLayout(Empathy_Instance this, co
 				dst_parameter->access = src_parameter->access;
 				dst_parameter->offset = src_parameter->offset;
 			}
+		}
+	}
+
+	if (desc->num_yields > 0)
+	{
+		assert(desc->yields);
+
+		uint64_t num_arguments = 0;
+		for (uint64_t i = 0; i < desc->num_yields; ++i)
+		{
+			const Empathy_YieldDesc *yield = &desc->yields[i];
+			num_arguments += yield->num_arguments;
+		}
+
+		result.num_yields = desc->num_yields;
+		result.yields = (Impl_ProgramLayoutYield *)malloc(sizeof(Impl_ProgramLayoutYield) * desc->num_yields);
+
+		result.yield_argument_types = (Empathy_ValueType *)malloc(sizeof(Empathy_ValueType) * num_arguments);
+
+		uint64_t current_argument = 0;
+		for (uint64_t i = 0; i < desc->num_yields; ++i)
+		{
+			const Empathy_YieldDesc *src_yield = &desc->yields[i];
+			Impl_ProgramLayoutYield *dst_yield = &result.yields[i];
+
+			dst_yield->atom = src_yield->atom;
+			dst_yield->num_arguments = src_yield->num_arguments;
+			dst_yield->base_argument = current_argument;
+
+			for (uint64_t j = 0; j < src_yield->num_arguments; ++j)
+				result.yield_argument_types[current_argument++] = src_yield->argument_types[j];
 		}
 	}
 

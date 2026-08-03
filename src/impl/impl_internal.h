@@ -12,6 +12,13 @@ typedef struct Impl_Instance_t
 	Empathy_Pool machines;
 } Impl_Instance;
 
+typedef struct Impl_ProgramLayoutAtomType_t
+{
+	uint32_t type;
+	uint32_t min_value;
+	uint32_t max_value;
+} Impl_ProgramLayoutAtomType;
+
 typedef struct Impl_ProgramLayoutParameter_t
 {
 	uint64_t index;
@@ -23,25 +30,24 @@ typedef struct Impl_ProgramLayoutParameter_t
 	uint64_t offset;
 } Impl_ProgramLayoutParameter;
 
-typedef struct Impl_ProgramLayoutCommand_t
+typedef struct Impl_ProgramLayoutYield_t
 {
-	uint64_t index;
-
+	Empathy_Atom atom;
 	uint64_t num_arguments;
 	uint64_t base_argument;
-
-	Empathy_ValueType result_type;
-
-} Impl_ProgramLayoutCommand;
+} Impl_ProgramLayoutYield;
 
 typedef struct Impl_ProgramLayout_t
 {
+	uint64_t num_atom_types;
+	Impl_ProgramLayoutAtomType *atom_types;
+
 	uint64_t num_parameters;
 	Impl_ProgramLayoutParameter *parameters;
 
-	uint64_t num_commands;
-	Impl_ProgramLayoutCommand *commands;
-	Empathy_ValueType *command_argument_types;
+	uint64_t num_yields;
+	Impl_ProgramLayoutYield *yields;
+	Empathy_ValueType *yield_argument_types;
 } Impl_ProgramLayout;
 
 typedef struct Impl_Program_t
