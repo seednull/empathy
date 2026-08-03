@@ -398,9 +398,9 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 				const uint8_t *table = (uint8_t *)machine->bindings[address.table].data;
 				const uint64_t table_size = machine->bindings[address.table].size;
 				assert(table);
-				assert(parameter_offset + parameter_size <= table_size);
 
-				EMPATHY_UNUSED(parameter_size);
+				if (parameter_offset + parameter_size > table_size)
+					return EMPATHY_PARAMETER_TABLE_OUT_OF_BOUNDS_READ;
 
 				table += parameter_offset;
 
@@ -471,7 +471,9 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 				uint8_t *table = (uint8_t *)machine->bindings[address.table].data;
 				uint64_t table_size = machine->bindings[address.table].size;
 				assert(table);
-				assert(parameter_offset + parameter_size <= table_size);
+
+				if (parameter_offset + parameter_size > table_size)
+					return EMPATHY_PARAMETER_TABLE_OUT_OF_BOUNDS_WRITE;
 
 				table += parameter_offset;
 
