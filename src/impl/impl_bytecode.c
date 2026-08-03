@@ -531,7 +531,7 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 				if (a.type.base_type != b.type.base_type)
 					return EMPATHY_BASE_TYPE_MISMATCH;
 
-				Empathy_Value value;
+				Empathy_Value value = {0};
 				value.type = a.type;
 
 				switch (value.type.base_type)
@@ -570,7 +570,7 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 				if (a.type.base_type != b.type.base_type)
 					return EMPATHY_BASE_TYPE_MISMATCH;
 
-				Empathy_Value value;
+				Empathy_Value value = {0};
 				value.type = a.type;
 
 				switch (value.type.base_type)
@@ -609,7 +609,7 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 				if (a.type.base_type != b.type.base_type)
 					return EMPATHY_BASE_TYPE_MISMATCH;
 
-				Empathy_Value value;
+				Empathy_Value value = {0};
 				value.type = a.type;
 
 				switch (value.type.base_type)
@@ -648,7 +648,7 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 				if (a.type.base_type != b.type.base_type)
 					return EMPATHY_BASE_TYPE_MISMATCH;
 
-				Empathy_Value value;
+				Empathy_Value value = {0};
 				value.type = a.type;
 
 				switch (value.type.base_type)
