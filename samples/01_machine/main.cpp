@@ -2,53 +2,31 @@
 #include <vector>
 #include <cassert>
 
-enum class AtomType: uint32_t
-{
-	YIELD,
-	LINE,
-};
-
-enum class YieldCommand: uint32_t
-{
-	ENUM_MIN = 0,
-	TEST = ENUM_MIN,
-
-	ENUM_MAX,
-};
-
 struct WorldState
 {
-	uint32_t day;
-	float time;
+	uint32_t day {42};
+	float time {42.0f};
 };
 
 struct LocalState
 {
-	uint32_t health;
+	float time {0.0f};
 };
 
-uint64_t cmdTest(uint32_t arg0, float arg1)
-{
-	return static_cast<uint64_t>(arg0 * arg1);
-}
+static WorldState world_state = {};
+static LocalState local_state = {};
 
 void testMachine(Empathy_Instance instance)
 {
-	Empathy_AtomTypeDesc atom_types[] =
-	{
-		{(uint32_t)AtomType::YIELD, (uint32_t)YieldCommand::ENUM_MIN, (uint32_t)YieldCommand::ENUM_MAX},
-		{(uint32_t)AtomType::LINE, 0, UINT32_MAX},
-	};
-
 	Empathy_ParameterDesc world_parameters[] =
 	{
 		{0, {EMPATHY_VALUE_BASE_TYPE_UINT32, 0}, EMPATHY_PARAMETER_ACCESS_FLAGS_READ, offsetof(WorldState, day)},
-		{1, {EMPATHY_VALUE_BASE_TYPE_FLOAT32, 0}, EMPATHY_PARAMETER_ACCESS_FLAGS_READ_WRITE, offsetof(WorldState, time)},
+		{1, {EMPATHY_VALUE_BASE_TYPE_FLOAT32, 0}, EMPATHY_PARAMETER_ACCESS_FLAGS_READ, offsetof(WorldState, time)},
 	};
 
 	Empathy_ParameterDesc local_parameters[] =
 	{
-		{0, {EMPATHY_VALUE_BASE_TYPE_UINT32, 0}, EMPATHY_PARAMETER_ACCESS_FLAGS_READ, offsetof(LocalState, health)},
+		{0, {EMPATHY_VALUE_BASE_TYPE_FLOAT32, 0}, EMPATHY_PARAMETER_ACCESS_FLAGS_READ_WRITE, offsetof(LocalState, time)},
 	};
 
 	Empathy_ParameterTableDesc tables[]
@@ -57,36 +35,34 @@ void testMachine(Empathy_Instance instance)
 		{1, 1, local_parameters},
 	};
 
-	Empathy_ValueType yield_test_signature[] =
-	{
-		{EMPATHY_VALUE_BASE_TYPE_UINT64, 0},
-		{EMPATHY_VALUE_BASE_TYPE_FLOAT32, 0},
-	};
-
-	Empathy_YieldDesc yields[] =
-	{
-		{{0,0}, 2, yield_test_signature},
-	};
-
 	Empathy_ProgramLayoutDesc layout_desc =
 	{
-		2, atom_types,
+		0, nullptr,
 		2, tables,
-		1, yields,
+		0, nullptr,
 	};
 
 	Empathy_ProgramLayout layout = EMPATHY_NULL_HANDLE;
 	Empathy_Result result = empathyCreateProgramLayout(instance, &layout_desc, &layout);
 	assert(result == EMPATHY_SUCCESS);
 
-	std::vector<uint8_t> payload;
-	payload.resize(128);
+	/*
+	 * load world_state, time
+	 * store local_state, time
+	 * end
+	 */
+	uint8_t payload[] =
+	{
+		0x0B, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+		0x0C, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		0x22,
+	};
 
 	Empathy_ProgramDesc program_desc =
 	{
 		layout,
-		payload.data(),
-		payload.size(),
+		sizeof(payload),
+		payload
 	};
 
 	Empathy_Program program = EMPATHY_NULL_HANDLE;
@@ -104,6 +80,21 @@ void testMachine(Empathy_Instance instance)
 	result = empathyCreateMachine(instance, &machine_desc, &machine);
 	assert(result == EMPATHY_SUCCESS);
 
+	result = empathyBindProgram(instance, machine, program);
+	assert(result == EMPATHY_SUCCESS);
+
+	result = empathyBindParameterTable(instance, machine, 0, &world_state);
+	assert(result == EMPATHY_SUCCESS);
+
+	result = empathyBindParameterTable(instance, machine, 1, &local_state);
+	assert(result == EMPATHY_SUCCESS);
+
+	assert(local_state.time == 0.0f);
+
+	result = empathyRun(instance, machine, 3);
+	assert(result == EMPATHY_SUCCESS);
+
+	assert(local_state.time == world_state.time);
 
 	result = empathyDestroyMachine(instance, machine);
 	assert(result == EMPATHY_SUCCESS);
