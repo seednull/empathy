@@ -510,7 +510,10 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 				if (head >= size)
 					return EMPATHY_EXECUTION_STACK_OVERFLOW;
 
-				Empathy_Value value = stack[head];
+				if (head == 0)
+					return EMPATHY_EXECUTION_STACK_UNDERFLOW;
+
+				Empathy_Value value = stack[head - 1];
 				stack[head++] = value;
 			}
 			break;
