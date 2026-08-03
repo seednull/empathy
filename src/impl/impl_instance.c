@@ -359,10 +359,10 @@ Empathy_Result impl_instanceRun(Empathy_Instance this, Empathy_Machine machine, 
 	assert(machine_ptr);
 	assert(machine_ptr->execution_stack.data);
 	assert(machine_ptr->execution_stack.size > 0);
-	assert(machine_ptr->execution_stack.head < machine_ptr->execution_stack.size);
+	assert(machine_ptr->execution_stack.head <= machine_ptr->execution_stack.size);
 	assert(machine_ptr->predicate_stack.data);
 	assert(machine_ptr->predicate_stack.size > 0);
-	assert(machine_ptr->predicate_stack.head < machine_ptr->predicate_stack.size);
+	assert(machine_ptr->predicate_stack.head <= machine_ptr->predicate_stack.size);
 
 	Impl_ProgramLayout *program_layout_ptr = (Impl_ProgramLayout *)empathy_poolGetElement(&instance_ptr->program_layouts, (Empathy_PoolHandle)machine_ptr->layout);
 	assert(program_layout_ptr);
