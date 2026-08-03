@@ -900,8 +900,82 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 			}
 			break;
 
-			// TODO: jumps
-			// TODO: yields
+			case IMPL_OPCODE_JUMP:
+			{
+				instruction_pointer = *(const uint64_t *)instruction_data;
+				instruction_size = 0;
+			}
+			break;
+
+			case IMPL_OPCODE_JUMP_FALSE:
+			{
+				if (head == 0)
+					return EMPATHY_EXECUTION_STACK_UNDERFLOW;
+
+				Empathy_Value value = stack[head--];
+				if (value.type.base_type != EMPATHY_VALUE_BASE_TYPE_UINT8)
+					return EMPATHY_INVALID_OPERAND_TYPE;
+
+				if (value.data.u8 == 0)
+				{
+					instruction_pointer = *(const uint64_t *)instruction_data;
+					instruction_size = 0;
+				}
+			}
+			break;
+
+			case IMPL_OPCODE_JUMP_TRUE:
+			{
+				if (head == 0)
+					return EMPATHY_EXECUTION_STACK_UNDERFLOW;
+
+				Empathy_Value value = stack[head--];
+				if (value.type.base_type != EMPATHY_VALUE_BASE_TYPE_UINT8)
+					return EMPATHY_INVALID_OPERAND_TYPE;
+
+				if (value.data.u8 != 0)
+				{
+					instruction_pointer = *(const uint64_t *)instruction_data;
+					instruction_size = 0;
+				}
+			}
+			break;
+
+			case IMPL_OPCODE_REJECT:
+			{
+				return EMPATHY_NOT_IMPLEMENTED;
+			}
+			break;
+
+			case IMPL_OPCODE_REJECT_FALSE:
+			{
+				return EMPATHY_NOT_IMPLEMENTED;
+			}
+			break;
+
+			case IMPL_OPCODE_REJECT_TRUE:
+			{
+				return EMPATHY_NOT_IMPLEMENTED;
+			}
+			break;
+
+			case IMPL_OPCODE_MATCH:
+			{
+				return EMPATHY_NOT_IMPLEMENTED;
+			}
+			break;
+
+			case IMPL_OPCODE_BEGIN_YIELD:
+			{
+				return EMPATHY_NOT_IMPLEMENTED;
+			}
+			break;
+
+			case IMPL_OPCODE_YIELD:
+			{
+				return EMPATHY_NOT_IMPLEMENTED;
+			}
+			break;
 
 			case IMPL_OPCODE_END:
 			{
