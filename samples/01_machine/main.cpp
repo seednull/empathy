@@ -2,6 +2,20 @@
 #include <vector>
 #include <cassert>
 
+enum class AtomType: uint32_t
+{
+	YIELD,
+	LINE,
+};
+
+enum class YieldCommand: uint32_t
+{
+	ENUM_MIN = 0,
+	TEST = ENUM_MIN,
+
+	ENUM_MAX,
+};
+
 struct WorldState
 {
 	uint32_t day;
@@ -20,15 +34,21 @@ uint64_t cmdTest(uint32_t arg0, float arg1)
 
 void testMachine(Empathy_Instance instance)
 {
+	Empathy_AtomTypeDesc atom_types[] =
+	{
+		{(uint32_t)AtomType::YIELD, (uint32_t)YieldCommand::ENUM_MIN, (uint32_t)YieldCommand::ENUM_MAX},
+		{(uint32_t)AtomType::LINE, 0, UINT32_MAX},
+	};
+
 	Empathy_ParameterDesc world_parameters[] =
 	{
-		{0, EMPATHY_VALUE_TYPE_UINT32, EMPATHY_PARAMETER_ACCESS_FLAGS_READ, offsetof(WorldState, day)},
-		{1, EMPATHY_VALUE_TYPE_FLOAT32, EMPATHY_PARAMETER_ACCESS_FLAGS_READWRITE, offsetof(WorldState, time)},
+		{0, {EMPATHY_VALUE_BASE_TYPE_UINT32, 0}, EMPATHY_PARAMETER_ACCESS_FLAGS_READ, offsetof(WorldState, day)},
+		{1, {EMPATHY_VALUE_BASE_TYPE_FLOAT32, 0}, EMPATHY_PARAMETER_ACCESS_FLAGS_READ_WRITE, offsetof(WorldState, time)},
 	};
 
 	Empathy_ParameterDesc local_parameters[] =
 	{
-		{0, EMPATHY_VALUE_TYPE_UINT32, EMPATHY_PARAMETER_ACCESS_FLAGS_READ, offsetof(LocalState, health)},
+		{0, {EMPATHY_VALUE_BASE_TYPE_UINT32, 0}, EMPATHY_PARAMETER_ACCESS_FLAGS_READ, offsetof(LocalState, health)},
 	};
 
 	Empathy_ParameterTableDesc tables[]
@@ -37,20 +57,22 @@ void testMachine(Empathy_Instance instance)
 		{1, 1, local_parameters},
 	};
 
-	Empathy_ValueType cmd_test_signature[] =
+	Empathy_ValueType yield_test_signature[] =
 	{
-		EMPATHY_VALUE_TYPE_UINT64, EMPATHY_VALUE_TYPE_FLOAT32,
+		{EMPATHY_VALUE_BASE_TYPE_UINT64, 0},
+		{EMPATHY_VALUE_BASE_TYPE_FLOAT32, 0},
 	};
 
-	Empathy_CommandDesc commands[] =
+	Empathy_YieldDesc yields[] =
 	{
-		{0, 2, cmd_test_signature, EMPATHY_VALUE_TYPE_UINT64},
+		{{0,0}, 2, yield_test_signature},
 	};
 
 	Empathy_ProgramLayoutDesc layout_desc =
 	{
+		2, atom_types,
 		2, tables,
-		1, commands,
+		1, yields,
 	};
 
 	Empathy_ProgramLayout layout = EMPATHY_NULL_HANDLE;
