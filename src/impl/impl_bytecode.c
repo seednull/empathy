@@ -906,13 +906,21 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 
 			case IMPL_OPCODE_JUMP:
 			{
-				instruction_pointer = *(const uint64_t *)instruction_data;
+				uint64_t jump_target = *(const uint64_t *)instruction_data;
+				if (jump_target >= program->size)
+					return EMPATHY_INVALID_INSTRUCTION_DATA;
+
+				instruction_pointer = jump_target;
 				instruction_size = 0;
 			}
 			break;
 
 			case IMPL_OPCODE_JUMP_FALSE:
 			{
+				uint64_t jump_target = *(const uint64_t *)instruction_data;
+				if (jump_target >= program->size)
+					return EMPATHY_INVALID_INSTRUCTION_DATA;
+
 				if (head == 0)
 					return EMPATHY_EXECUTION_STACK_UNDERFLOW;
 
@@ -922,7 +930,7 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 
 				if (value.data.u8 == 0)
 				{
-					instruction_pointer = *(const uint64_t *)instruction_data;
+					instruction_pointer = jump_target;
 					instruction_size = 0;
 				}
 			}
@@ -930,6 +938,10 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 
 			case IMPL_OPCODE_JUMP_TRUE:
 			{
+				uint64_t jump_target = *(const uint64_t *)instruction_data;
+				if (jump_target >= program->size)
+					return EMPATHY_INVALID_INSTRUCTION_DATA;
+
 				if (head == 0)
 					return EMPATHY_EXECUTION_STACK_UNDERFLOW;
 
@@ -939,7 +951,7 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 
 				if (value.data.u8 != 0)
 				{
-					instruction_pointer = *(const uint64_t *)instruction_data;
+					instruction_pointer = jump_target;
 					instruction_size = 0;
 				}
 			}
