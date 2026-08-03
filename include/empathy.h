@@ -210,7 +210,7 @@ typedef Empathy_Result (*PFN_empathyDestroyMachine)(Empathy_Instance instance, E
 typedef Empathy_Result (*PFN_empathyDestroyInstance)(Empathy_Instance instance);
 
 typedef Empathy_Result (*PFN_empathyBindProgram)(Empathy_Instance instance, Empathy_Machine machine, Empathy_Program program);
-typedef Empathy_Result (*PFN_empathyBindParameterTable)(Empathy_Instance instance, Empathy_Machine machine, uint32_t index, void *data);
+typedef Empathy_Result (*PFN_empathyBindParameterTable)(Empathy_Instance instance, Empathy_Machine machine, uint32_t index, uint64_t size, void *data);
 typedef Empathy_Result (*PFN_empathyRun)(Empathy_Instance instance, Empathy_Machine machine, uint32_t budget);
 
 
@@ -245,7 +245,7 @@ EMPATHY_APIENTRY Empathy_Result empathyDestroyMachine(Empathy_Instance instance,
 EMPATHY_APIENTRY Empathy_Result empathyDestroyInstance(Empathy_Instance instance);
 
 EMPATHY_APIENTRY Empathy_Result empathyBindProgram(Empathy_Instance instance, Empathy_Machine machine, Empathy_Program program);
-EMPATHY_APIENTRY Empathy_Result empathyBindParameterTable(Empathy_Instance instance, Empathy_Machine machine, uint32_t index, void *data);
+EMPATHY_APIENTRY Empathy_Result empathyBindParameterTable(Empathy_Instance instance, Empathy_Machine machine, uint32_t index, uint64_t size, void *data);
 EMPATHY_APIENTRY Empathy_Result empathyRun(Empathy_Instance instance, Empathy_Machine machine, uint32_t budget);
 #endif
 

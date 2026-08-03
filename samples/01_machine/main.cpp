@@ -83,10 +83,10 @@ void testMachine(Empathy_Instance instance)
 	result = empathyBindProgram(instance, machine, program);
 	assert(result == EMPATHY_SUCCESS);
 
-	result = empathyBindParameterTable(instance, machine, 0, &world_state);
+	result = empathyBindParameterTable(instance, machine, 0, sizeof(WorldState), &world_state);
 	assert(result == EMPATHY_SUCCESS);
 
-	result = empathyBindParameterTable(instance, machine, 1, &local_state);
+	result = empathyBindParameterTable(instance, machine, 1, sizeof(LocalState), &local_state);
 	assert(result == EMPATHY_SUCCESS);
 
 	assert(local_state.time == 0.0f);

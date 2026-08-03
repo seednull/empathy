@@ -330,7 +330,7 @@ Empathy_Result impl_instanceBindProgram(Empathy_Instance this, Empathy_Machine m
 	return EMPATHY_SUCCESS;
 }
 
-Empathy_Result impl_instanceBindParameterTable(Empathy_Instance this, Empathy_Machine machine, uint32_t index, void *data)
+Empathy_Result impl_instanceBindParameterTable(Empathy_Instance this, Empathy_Machine machine, uint32_t index, uint64_t size, void *data)
 {
 	assert(this);
 	assert(machine);
@@ -340,6 +340,7 @@ Empathy_Result impl_instanceBindParameterTable(Empathy_Instance this, Empathy_Ma
 	assert(machine_ptr);
 	assert(index < machine_ptr->max_bindings);
 
+	machine_ptr->bindings[index].size = size;
 	machine_ptr->bindings[index].data = data;
 
 	return EMPATHY_SUCCESS;

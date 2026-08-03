@@ -59,6 +59,7 @@ typedef struct Impl_Program_t
 
 typedef struct Impl_MachineBinding_t
 {
+	uint64_t size;
 	void *data;
 } Impl_MachineBinding;
 

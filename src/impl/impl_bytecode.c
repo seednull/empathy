@@ -391,11 +391,17 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 					return EMPATHY_PARAMETER_NOT_READABLE;
 
 				uint64_t parameter_offset = parameter->offset;
+				uint64_t parameter_size = base_type_sizes[parameter->type.base_type];
 
 				assert(address.table < machine->max_bindings);
 
 				const uint8_t *table = (uint8_t *)machine->bindings[address.table].data;
+				const uint64_t table_size = machine->bindings[address.table].size;
 				assert(table);
+				assert(parameter_offset + parameter_size <= table_size);
+
+				EMPATHY_UNUSED(parameter_size);
+
 				table += parameter_offset;
 
 				Empathy_Value value = {0};
@@ -463,7 +469,9 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 				assert(address.table < machine->max_bindings);
 
 				uint8_t *table = (uint8_t *)machine->bindings[address.table].data;
+				uint64_t table_size = machine->bindings[address.table].size;
 				assert(table);
+				assert(parameter_offset + parameter_size <= table_size);
 
 				table += parameter_offset;
 
