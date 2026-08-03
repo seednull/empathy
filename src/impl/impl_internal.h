@@ -21,8 +21,8 @@ typedef struct Impl_ProgramLayoutAtomType_t
 
 typedef struct Impl_ProgramLayoutParameter_t
 {
-	uint64_t index;
-	uint64_t binding;
+	uint32_t index;
+	uint32_t table;
 
 	Empathy_ValueType type;
 	Empathy_ParameterAccessFlags access;
@@ -32,7 +32,7 @@ typedef struct Impl_ProgramLayoutParameter_t
 
 typedef struct Impl_ProgramLayoutYield_t
 {
-	Empathy_Atom atom;
+	uint32_t index;
 	uint64_t num_arguments;
 	uint64_t base_argument;
 } Impl_ProgramLayoutYield;
@@ -71,6 +71,7 @@ typedef struct Impl_MachineStack_t
 
 typedef struct Impl_Machine_t
 {
+	Empathy_ProgramLayout layout;
 	Empathy_Program program;
 	Impl_MachineStack execution_stack;
 	Impl_MachineStack predicate_stack;
@@ -78,3 +79,6 @@ typedef struct Impl_Machine_t
 	uint64_t max_bindings;
 	uint64_t instruction_pointer;
 } Impl_Machine;
+
+Empathy_Result impl_bytecodeValidate(uint64_t size, const void *data, const Impl_ProgramLayout *layout);
+Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, const Impl_Program *program, const Impl_ProgramLayout *layout);

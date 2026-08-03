@@ -57,7 +57,7 @@ static Empathy_Result impl_instanceCreateProgramLayout(Empathy_Instance this, co
 	{
 		assert(desc->atom_types);
 
-		result.num_atom_types = desc->atom_types;
+		result.num_atom_types = desc->num_atom_types;
 		result.atom_types = (Impl_ProgramLayoutAtomType *)malloc(sizeof(Impl_ProgramLayoutAtomType) * desc->num_atom_types);
 
 		for (uint64_t i = 0; i < desc->num_atom_types; ++i)
@@ -101,7 +101,7 @@ static Empathy_Result impl_instanceCreateProgramLayout(Empathy_Instance this, co
 				Impl_ProgramLayoutParameter *dst_parameter = &result.parameters[current_parameter++];
 
 				dst_parameter->index = src_parameter->index;
-				dst_parameter->binding = table->binding;
+				dst_parameter->table = table->index;
 				dst_parameter->type = src_parameter->type;
 				dst_parameter->access = src_parameter->access;
 				dst_parameter->offset = src_parameter->offset;
@@ -131,7 +131,7 @@ static Empathy_Result impl_instanceCreateProgramLayout(Empathy_Instance this, co
 			const Empathy_YieldDesc *src_yield = &desc->yields[i];
 			Impl_ProgramLayoutYield *dst_yield = &result.yields[i];
 
-			dst_yield->atom = src_yield->atom;
+			dst_yield->index = src_yield->index;
 			dst_yield->num_arguments = src_yield->num_arguments;
 			dst_yield->base_argument = current_argument;
 
@@ -156,13 +156,15 @@ static Empathy_Result impl_instanceCreateProgram(Empathy_Instance this, const Em
 	Impl_ProgramLayout *program_layout_ptr = (Impl_ProgramLayout *)empathy_poolGetElement(&instance_ptr->program_layouts, (Empathy_PoolHandle)desc->layout);
 	assert(program_layout_ptr);
 
+	Empathy_Result empathy_result = impl_bytecodeValidate(desc->size, desc->data, program_layout_ptr);
+	if (empathy_result != EMPATHY_SUCCESS)
+		return empathy_result;
+
 	Impl_Program result = {0};
 	result.layout = desc->layout;
 	result.size = desc->size;
 	result.data = malloc(desc->size);
 	memcpy(result.data, desc->data, desc->size);
-
-	// TODO: validate?
 
 	*program = (Empathy_Program)empathy_poolAddElement(&instance_ptr->programs, &result);
 	return EMPATHY_SUCCESS;
@@ -196,7 +198,7 @@ static Empathy_Result impl_instanceCreateMachine(Empathy_Instance this, const Em
 	result.predicate_stack.size = desc->predicate_stack_size;
 	result.predicate_stack.data = (Empathy_Value *)malloc(sizeof(Empathy_Value) * desc->predicate_stack_size);
 
-	*machine = (Empathy_Program)empathy_poolAddElement(&instance_ptr->machines, &result);
+	*machine = (Empathy_Machine)empathy_poolAddElement(&instance_ptr->machines, &result);
 	return EMPATHY_SUCCESS;
 }
 
@@ -309,6 +311,67 @@ static Empathy_Result impl_instanceDestroy(Empathy_Instance this)
 	return EMPATHY_SUCCESS;
 }
 
+Empathy_Result impl_instanceBindProgram(Empathy_Instance this, Empathy_Machine machine, Empathy_Program program)
+{
+	assert(this);
+	assert(machine);
+
+	Impl_Instance *instance_ptr = (Impl_Instance *)this;
+
+	Impl_Program *program_ptr = (Impl_Program *)empathy_poolGetElement(&instance_ptr->programs, (Empathy_PoolHandle)program);
+	assert(program_ptr);
+
+	Impl_Machine *machine_ptr = (Impl_Machine *)empathy_poolGetElement(&instance_ptr->machines, (Empathy_PoolHandle)machine);
+	assert(machine_ptr);
+
+	machine_ptr->layout = program_ptr->layout;
+	machine_ptr->program = program;
+
+	return EMPATHY_SUCCESS;
+}
+
+Empathy_Result impl_instanceBindParameterTable(Empathy_Instance this, Empathy_Machine machine, uint32_t index, void *data)
+{
+	assert(this);
+	assert(machine);
+
+	Impl_Instance *instance_ptr = (Impl_Instance *)this;
+	Impl_Machine *machine_ptr = (Impl_Machine *)empathy_poolGetElement(&instance_ptr->machines, (Empathy_PoolHandle)machine);
+	assert(machine_ptr);
+	assert(index < machine_ptr->max_bindings);
+
+	machine_ptr->bindings[index].data = data;
+
+	return EMPATHY_SUCCESS;
+}
+
+Empathy_Result impl_instanceRun(Empathy_Instance this, Empathy_Machine machine, uint32_t budget)
+{
+	assert(this);
+	assert(machine);
+
+	Impl_Instance *instance_ptr = (Impl_Instance *)this;
+	Impl_Machine *machine_ptr = (Impl_Machine *)empathy_poolGetElement(&instance_ptr->machines, (Empathy_PoolHandle)machine);
+	assert(machine_ptr);
+	assert(machine_ptr->execution_stack.data);
+	assert(machine_ptr->execution_stack.size > 0);
+	assert(machine_ptr->execution_stack.head < machine_ptr->execution_stack.size);
+	assert(machine_ptr->predicate_stack.data);
+	assert(machine_ptr->predicate_stack.size > 0);
+	assert(machine_ptr->predicate_stack.head < machine_ptr->predicate_stack.size);
+
+	Impl_ProgramLayout *program_layout_ptr = (Impl_ProgramLayout *)empathy_poolGetElement(&instance_ptr->program_layouts, (Empathy_PoolHandle)machine_ptr->layout);
+	assert(program_layout_ptr);
+
+	Impl_Program *program_ptr = (Impl_Program *)empathy_poolGetElement(&instance_ptr->programs, (Empathy_PoolHandle)machine_ptr->program);
+	assert(program_ptr);
+	assert(program_ptr->data);
+	assert(program_ptr->size);
+	assert(program_ptr->layout == machine_ptr->layout);
+
+	return impl_bytecodeExecute(machine_ptr, budget, program_ptr, program_layout_ptr);
+}
+
 /*
  */
 static Empathy_InstanceTable instance_vtbl =
@@ -321,6 +384,10 @@ static Empathy_InstanceTable instance_vtbl =
 	impl_instanceDestroyProgram,
 	impl_instanceDestroyMachine,
 	impl_instanceDestroy,
+
+	impl_instanceBindProgram,
+	impl_instanceBindParameterTable,
+	impl_instanceRun,
 };
 
 /*

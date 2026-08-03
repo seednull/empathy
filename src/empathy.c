@@ -118,3 +118,39 @@ Empathy_Result empathyDestroyInstance(Empathy_Instance instance)
 
 	return ptr->vtbl->destroyInstance(instance);
 }
+
+Empathy_Result empathyBindProgram(Empathy_Instance instance, Empathy_Machine machine, Empathy_Program program)
+{
+	if (instance == EMPATHY_NULL_HANDLE)
+		return EMPATHY_INVALID_INSTANCE;
+
+	Empathy_InstanceInternal *ptr = (Empathy_InstanceInternal *)instance;
+	assert(ptr->vtbl);
+	assert(ptr->vtbl->bindProgram);
+
+	return ptr->vtbl->bindProgram(instance, machine, program);
+}
+
+Empathy_Result empathyBindParameterTable(Empathy_Instance instance, Empathy_Machine machine, uint32_t index, void *data)
+{
+	if (instance == EMPATHY_NULL_HANDLE)
+		return EMPATHY_INVALID_INSTANCE;
+
+	Empathy_InstanceInternal *ptr = (Empathy_InstanceInternal *)instance;
+	assert(ptr->vtbl);
+	assert(ptr->vtbl->bindParameterTable);
+
+	return ptr->vtbl->bindParameterTable(instance, machine, index, data);
+}
+
+Empathy_Result empathyRun(Empathy_Instance instance, Empathy_Machine machine, uint32_t budget)
+{
+	if (instance == EMPATHY_NULL_HANDLE)
+		return EMPATHY_INVALID_INSTANCE;
+
+	Empathy_InstanceInternal *ptr = (Empathy_InstanceInternal *)instance;
+	assert(ptr->vtbl);
+	assert(ptr->vtbl->run);
+
+	return ptr->vtbl->run(instance, machine, budget);
+}
