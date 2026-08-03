@@ -676,7 +676,22 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 
 				Empathy_Value value = {0};
 				value.type.base_type = EMPATHY_VALUE_BASE_TYPE_UINT8;
-				value.data.u8 = (memcmp(&a, &b, sizeof(Empathy_Value)) == 0);
+
+				switch (a.type.base_type)
+				{
+					case EMPATHY_VALUE_BASE_TYPE_UINT8: value.data.u8 = (a.data.u8 == b.data.u8); break;
+					case EMPATHY_VALUE_BASE_TYPE_UINT16: value.data.u8 = (a.data.u16 == b.data.u16); break;
+					case EMPATHY_VALUE_BASE_TYPE_UINT32: value.data.u8 = (a.data.u32 == b.data.u32); break;
+					case EMPATHY_VALUE_BASE_TYPE_UINT64: value.data.u8 = (a.data.u64 == b.data.u64); break;
+					case EMPATHY_VALUE_BASE_TYPE_INT8: value.data.u8 = (a.data.i8 == b.data.i8); break;
+					case EMPATHY_VALUE_BASE_TYPE_INT16: value.data.u8 = (a.data.i16 == b.data.i16); break;
+					case EMPATHY_VALUE_BASE_TYPE_INT32: value.data.u8 = (a.data.i32 == b.data.i32); break;
+					case EMPATHY_VALUE_BASE_TYPE_INT64: value.data.u8 = (a.data.i64 == b.data.i64); break;
+					case EMPATHY_VALUE_BASE_TYPE_FLOAT32: value.data.u8 = (a.data.f32 == b.data.f32); break;
+					case EMPATHY_VALUE_BASE_TYPE_FLOAT64: value.data.u8 = (a.data.f64 == b.data.f64); break;
+					case EMPATHY_VALUE_BASE_TYPE_ATOM: value.data.u8 = (memcmp(&a.data.atom, &b.data.atom, sizeof(Empathy_Atom)) == 0); break;
+					default: assert(0); return EMPATHY_INTERNAL_ERROR;
+				}
 
 				stack[++head] = value;
 			}
@@ -698,7 +713,22 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 
 				Empathy_Value value = {0};
 				value.type.base_type = EMPATHY_VALUE_BASE_TYPE_UINT8;
-				value.data.u8 = (memcmp(&a, &b, sizeof(Empathy_Value)) != 0);
+
+				switch (a.type.base_type)
+				{
+					case EMPATHY_VALUE_BASE_TYPE_UINT8: value.data.u8 = (a.data.u8 != b.data.u8); break;
+					case EMPATHY_VALUE_BASE_TYPE_UINT16: value.data.u8 = (a.data.u16 != b.data.u16); break;
+					case EMPATHY_VALUE_BASE_TYPE_UINT32: value.data.u8 = (a.data.u32 != b.data.u32); break;
+					case EMPATHY_VALUE_BASE_TYPE_UINT64: value.data.u8 = (a.data.u64 != b.data.u64); break;
+					case EMPATHY_VALUE_BASE_TYPE_INT8: value.data.u8 = (a.data.i8 != b.data.i8); break;
+					case EMPATHY_VALUE_BASE_TYPE_INT16: value.data.u8 = (a.data.i16 != b.data.i16); break;
+					case EMPATHY_VALUE_BASE_TYPE_INT32: value.data.u8 = (a.data.i32 != b.data.i32); break;
+					case EMPATHY_VALUE_BASE_TYPE_INT64: value.data.u8 = (a.data.i64 != b.data.i64); break;
+					case EMPATHY_VALUE_BASE_TYPE_FLOAT32: value.data.u8 = (a.data.f32 != b.data.f32); break;
+					case EMPATHY_VALUE_BASE_TYPE_FLOAT64: value.data.u8 = (a.data.f64 != b.data.f64); break;
+					case EMPATHY_VALUE_BASE_TYPE_ATOM: value.data.u8 = (memcmp(&a.data.atom, &b.data.atom, sizeof(Empathy_Atom)) != 0); break;
+					default: assert(0); return EMPATHY_INTERNAL_ERROR;
+				}
 
 				stack[++head] = value;
 			}
