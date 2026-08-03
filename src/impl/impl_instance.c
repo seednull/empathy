@@ -16,7 +16,7 @@ static void impl_destroyProgramLayout(Impl_Instance *instance_ptr, Impl_ProgramL
 	free(program_layout_ptr->atom_types);
 	free(program_layout_ptr->parameters);
 	free(program_layout_ptr->yields);
-	free(program_layout_ptr->yield_argument_types);
+	free(program_layout_ptr->yield_resume_value_types);
 };
 
 static void impl_destroyProgram(Impl_Instance *instance_ptr, Impl_Program *program_ptr)
@@ -113,17 +113,17 @@ static Empathy_Result impl_instanceCreateProgramLayout(Empathy_Instance this, co
 	{
 		assert(desc->yields);
 
-		uint64_t num_arguments = 0;
+		uint64_t num_resume_values = 0;
 		for (uint64_t i = 0; i < desc->num_yields; ++i)
 		{
 			const Empathy_YieldDesc *yield = &desc->yields[i];
-			num_arguments += yield->num_arguments;
+			num_resume_values += yield->num_resume_values;
 		}
 
 		result.num_yields = desc->num_yields;
 		result.yields = (Impl_ProgramLayoutYield *)malloc(sizeof(Impl_ProgramLayoutYield) * desc->num_yields);
 
-		result.yield_argument_types = (Empathy_ValueType *)malloc(sizeof(Empathy_ValueType) * num_arguments);
+		result.yield_resume_value_types = (Empathy_ValueType *)malloc(sizeof(Empathy_ValueType) * num_resume_values);
 
 		uint64_t current_argument = 0;
 		for (uint64_t i = 0; i < desc->num_yields; ++i)
@@ -132,11 +132,11 @@ static Empathy_Result impl_instanceCreateProgramLayout(Empathy_Instance this, co
 			Impl_ProgramLayoutYield *dst_yield = &result.yields[i];
 
 			dst_yield->index = src_yield->index;
-			dst_yield->num_arguments = src_yield->num_arguments;
-			dst_yield->base_argument = current_argument;
+			dst_yield->num_resume_values = src_yield->num_resume_values;
+			dst_yield->base_resume_value = current_argument;
 
-			for (uint64_t j = 0; j < src_yield->num_arguments; ++j)
-				result.yield_argument_types[current_argument++] = src_yield->argument_types[j];
+			for (uint64_t j = 0; j < src_yield->num_resume_values; ++j)
+				result.yield_resume_value_types[current_argument++] = src_yield->resume_value_types[j];
 		}
 	}
 

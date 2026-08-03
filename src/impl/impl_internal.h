@@ -33,8 +33,8 @@ typedef struct Impl_ProgramLayoutParameter_t
 typedef struct Impl_ProgramLayoutYield_t
 {
 	uint32_t index;
-	uint64_t num_arguments;
-	uint64_t base_argument;
+	uint64_t num_resume_values;
+	uint64_t base_resume_value;
 } Impl_ProgramLayoutYield;
 
 typedef struct Impl_ProgramLayout_t
@@ -47,7 +47,7 @@ typedef struct Impl_ProgramLayout_t
 
 	uint64_t num_yields;
 	Impl_ProgramLayoutYield *yields;
-	Empathy_ValueType *yield_argument_types;
+	Empathy_ValueType *yield_resume_value_types;
 } Impl_ProgramLayout;
 
 typedef struct Impl_Program_t

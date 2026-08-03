@@ -169,8 +169,8 @@ typedef struct Empathy_YieldDesc
 {
 	uint32_t index;
 
-	uint64_t num_arguments;
-	const Empathy_ValueType *argument_types;
+	uint64_t num_resume_values;
+	const Empathy_ValueType *resume_value_types;
 } Empathy_YieldDesc;
 
 typedef struct Empathy_ProgramLayoutDesc_t
