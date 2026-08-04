@@ -133,34 +133,38 @@ Empathy_Result impl_bytecodeValidate(uint64_t size, const void *data, const Impl
 	return EMPATHY_SUCCESS;
 }
 
-Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, const Impl_Program *program, const Impl_ProgramLayout *layout)
+Empathy_Result impl_bytecodeExecute(Impl_ExecutionContext *context, uint32_t budget)
 {
-	assert(machine);
+	assert(context);
+
+	const Impl_Program *program = context->program;
 	assert(program);
 	assert(program->data);
 	assert(program->size > 0);
+
+	const Impl_ProgramLayout *layout = context->layout;
 	assert(layout);
 
-	const uint8_t *bytes = (const uint8_t *)program->data;
-
-	Impl_MachineStack *stack = &machine->execution_stack;
+	Impl_MachineStack *stack = &context->stack;
 	assert(stack);
 	assert(stack->data);
 	assert(stack->size > 0);
 	assert(stack->head <= stack->size);
 
+	const uint8_t *bytes = (const uint8_t *)program->data;
+
 	for (uint32_t current_budget = 0; current_budget < budget; ++current_budget)
 	{
-		uint8_t opcode = bytes[machine->instruction_pointer];
+		uint8_t opcode = bytes[context->instruction_pointer];
 
 		if (opcode < IMPL_OPCODE_ENUM_START || opcode > IMPL_OPCODE_ENUM_END)
 			return EMPATHY_INVALID_INSTRUCTION_OPCODE;
 
 		uint64_t instruction_size = instruction_sizes[opcode];
-		if (machine->instruction_pointer + instruction_size > program->size)
+		if (context->instruction_pointer + instruction_size > program->size)
 			return EMPATHY_INVALID_INSTRUCTION_OPCODE;
 
-		const uint8_t *instruction_data = bytes + machine->instruction_pointer + 1;
+		const uint8_t *instruction_data = bytes + context->instruction_pointer + 1;
 
 		switch (opcode)
 		{
@@ -348,10 +352,10 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 				uint64_t parameter_offset = parameter->offset;
 				uint64_t parameter_size = base_type_sizes[parameter->type.base_type];
 
-				assert(parameter->table < machine->max_bindings);
+				assert(parameter->table < context->max_bindings);
 
-				const uint8_t *table = (uint8_t *)machine->bindings[parameter->table].data;
-				const uint64_t table_size = machine->bindings[parameter->table].size;
+				const uint8_t *table = (uint8_t *)context->bindings[parameter->table].data;
+				const uint64_t table_size = context->bindings[parameter->table].size;
 				assert(table);
 
 				if (parameter_offset + parameter_size > table_size)
@@ -409,10 +413,10 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 				uint64_t value_size = base_type_sizes[value.type.base_type];
 
 				assert(value_size == parameter_size);
-				assert(parameter->table < machine->max_bindings);
+				assert(parameter->table < context->max_bindings);
 
-				uint8_t *table = (uint8_t *)machine->bindings[parameter->table].data;
-				uint64_t table_size = machine->bindings[parameter->table].size;
+				uint8_t *table = (uint8_t *)context->bindings[parameter->table].data;
+				uint64_t table_size = context->bindings[parameter->table].size;
 				assert(table);
 
 				if (parameter_offset + parameter_size > table_size)
@@ -864,7 +868,7 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 				if (jump_target >= program->size)
 					return EMPATHY_INVALID_INSTRUCTION_DATA;
 
-				machine->instruction_pointer = jump_target;
+				context->instruction_pointer = jump_target;
 				instruction_size = 0;
 			}
 			break;
@@ -884,7 +888,7 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 
 				if (value.data.u8 == 0)
 				{
-					machine->instruction_pointer = jump_target;
+					context->instruction_pointer = jump_target;
 					instruction_size = 0;
 				}
 
@@ -907,7 +911,7 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 
 				if (value.data.u8 != 0)
 				{
-					machine->instruction_pointer = jump_target;
+					context->instruction_pointer = jump_target;
 					instruction_size = 0;
 				}
 
@@ -953,13 +957,13 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 
 			case IMPL_OPCODE_END:
 			{
-				machine->instruction_pointer += instruction_size;
+				context->instruction_pointer += instruction_size;
 				return EMPATHY_EXECUTION_END;
 			}
 			break;
 		}
 
-		machine->instruction_pointer += instruction_size;
+		context->instruction_pointer += instruction_size;
 	}
 
 	return EMPATHY_EXECUTION_BUDGET_EXCEEDED;

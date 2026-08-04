@@ -79,5 +79,15 @@ typedef struct Impl_Machine_t
 	uint64_t instruction_pointer;
 } Impl_Machine;
 
+typedef struct Impl_ExecutionContext_t
+{
+	const Impl_Program *program;
+	const Impl_ProgramLayout *layout;
+	Impl_MachineStack stack;
+	Impl_MachineBinding *bindings;
+	uint64_t max_bindings;
+	uint64_t instruction_pointer;
+} Impl_ExecutionContext;
+
 Empathy_Result impl_bytecodeValidate(uint64_t size, const void *data, const Impl_ProgramLayout *layout);
-Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, const Impl_Program *program, const Impl_ProgramLayout *layout);
+Empathy_Result impl_bytecodeExecute(Impl_ExecutionContext *context, uint32_t budget);

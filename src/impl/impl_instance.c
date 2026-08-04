@@ -353,7 +353,20 @@ Empathy_Result impl_instanceRun(Empathy_Instance this, Empathy_Machine machine, 
 	assert(program_ptr->size);
 	assert(program_ptr->layout == machine_ptr->layout);
 
-	return impl_bytecodeExecute(machine_ptr, budget, program_ptr, program_layout_ptr);
+	Impl_ExecutionContext context = {0};
+	context.program = program_ptr;
+	context.layout = program_layout_ptr;
+	context.stack = machine_ptr->execution_stack;
+	context.bindings = machine_ptr->bindings;
+	context.max_bindings = machine_ptr->max_bindings;
+	context.instruction_pointer = machine_ptr->instruction_pointer;
+
+	Empathy_Result result = impl_bytecodeExecute(&context, budget);
+
+	machine_ptr->instruction_pointer = context.instruction_pointer;
+	machine_ptr->execution_stack.head = context.stack.head;
+
+	return result;
 }
 
 /*
