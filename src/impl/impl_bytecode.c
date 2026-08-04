@@ -167,7 +167,6 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 			return EMPATHY_INVALID_INSTRUCTION_OPCODE;
 
 		const uint8_t *instruction_data = bytes + machine->instruction_pointer + 1;
-		machine->instruction_pointer += instruction_size;
 
 		switch (opcode)
 		{
@@ -427,7 +426,7 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 				if ((parameter->access & EMPATHY_PARAMETER_ACCESS_FLAGS_WRITE) == 0)
 					return EMPATHY_PARAMETER_NOT_WRITABLE;
 
-				Empathy_Value value = stack->data[--stack->head];
+				Empathy_Value value = stack->data[stack->head - 1];
 
 				if (parameter->type.base_type != value.type.base_type)
 					return EMPATHY_BASE_TYPE_MISMATCH;
@@ -466,6 +465,8 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 					case EMPATHY_VALUE_BASE_TYPE_ATOM: *(Empathy_Atom *)table = value.data.atom; break;
 					default: assert(0); return EMPATHY_INTERNAL_ERROR;
 				}
+
+				stack->head -= 1;
 			}
 			break;
 
@@ -496,8 +497,8 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 				if (stack->head <= 1)
 					return EMPATHY_STACK_UNDERFLOW;
 
-				Empathy_Value b = stack->data[--stack->head];
-				Empathy_Value a = stack->data[--stack->head];
+				Empathy_Value b = stack->data[stack->head - 1];
+				Empathy_Value a = stack->data[stack->head - 2];
 
 				if (a.type.base_type == EMPATHY_VALUE_BASE_TYPE_ATOM)
 					return EMPATHY_INVALID_OPERAND_TYPE;
@@ -526,6 +527,7 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 					default: assert(0); return EMPATHY_INTERNAL_ERROR;
 				}
 
+				stack->head -= 2;
 				stack->data[stack->head++] = value;
 			}
 			break;
@@ -535,8 +537,8 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 				if (stack->head <= 1)
 					return EMPATHY_STACK_UNDERFLOW;
 
-				Empathy_Value b = stack->data[--stack->head];
-				Empathy_Value a = stack->data[--stack->head];
+				Empathy_Value b = stack->data[stack->head - 1];
+				Empathy_Value a = stack->data[stack->head - 2];
 
 				if (a.type.base_type == EMPATHY_VALUE_BASE_TYPE_ATOM)
 					return EMPATHY_INVALID_OPERAND_TYPE;
@@ -565,6 +567,7 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 					default: assert(0); return EMPATHY_INTERNAL_ERROR;
 				}
 
+				stack->head -= 2;
 				stack->data[stack->head++] = value;
 			}
 			break;
@@ -574,8 +577,8 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 				if (stack->head <= 1)
 					return EMPATHY_STACK_UNDERFLOW;
 
-				Empathy_Value b = stack->data[--stack->head];
-				Empathy_Value a = stack->data[--stack->head];
+				Empathy_Value b = stack->data[stack->head - 1];
+				Empathy_Value a = stack->data[stack->head - 2];
 
 				if (a.type.base_type == EMPATHY_VALUE_BASE_TYPE_ATOM)
 					return EMPATHY_INVALID_OPERAND_TYPE;
@@ -604,6 +607,7 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 					default: assert(0); return EMPATHY_INTERNAL_ERROR;
 				}
 
+				stack->head -= 2;
 				stack->data[stack->head++] = value;
 			}
 			break;
@@ -613,8 +617,8 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 				if (stack->head <= 1)
 					return EMPATHY_STACK_UNDERFLOW;
 
-				Empathy_Value b = stack->data[--stack->head];
-				Empathy_Value a = stack->data[--stack->head];
+				Empathy_Value b = stack->data[stack->head - 1];
+				Empathy_Value a = stack->data[stack->head - 2];
 
 				if (a.type.base_type == EMPATHY_VALUE_BASE_TYPE_ATOM)
 					return EMPATHY_INVALID_OPERAND_TYPE;
@@ -643,6 +647,7 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 					default: assert(0); return EMPATHY_INTERNAL_ERROR;
 				}
 
+				stack->head -= 2;
 				stack->data[stack->head++] = value;
 			}
 			break;
@@ -652,8 +657,8 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 				if (stack->head <= 1)
 					return EMPATHY_STACK_UNDERFLOW;
 
-				Empathy_Value b = stack->data[--stack->head];
-				Empathy_Value a = stack->data[--stack->head];
+				Empathy_Value b = stack->data[stack->head - 1];
+				Empathy_Value a = stack->data[stack->head - 2];
 
 				if (a.type.base_type != b.type.base_type)
 					return EMPATHY_BASE_TYPE_MISMATCH;
@@ -680,6 +685,7 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 					default: assert(0); return EMPATHY_INTERNAL_ERROR;
 				}
 
+				stack->head -= 2;
 				stack->data[stack->head++] = value;
 			}
 			break;
@@ -689,8 +695,8 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 				if (stack->head <= 1)
 					return EMPATHY_STACK_UNDERFLOW;
 
-				Empathy_Value b = stack->data[--stack->head];
-				Empathy_Value a = stack->data[--stack->head];
+				Empathy_Value b = stack->data[stack->head - 1];
+				Empathy_Value a = stack->data[stack->head - 2];
 
 				if (a.type.base_type != b.type.base_type)
 					return EMPATHY_BASE_TYPE_MISMATCH;
@@ -717,6 +723,7 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 					default: assert(0); return EMPATHY_INTERNAL_ERROR;
 				}
 
+				stack->head -= 2;
 				stack->data[stack->head++] = value;
 			}
 			break;
@@ -726,8 +733,8 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 				if (stack->head <= 1)
 					return EMPATHY_STACK_UNDERFLOW;
 
-				Empathy_Value b = stack->data[--stack->head];
-				Empathy_Value a = stack->data[--stack->head];
+				Empathy_Value b = stack->data[stack->head - 1];
+				Empathy_Value a = stack->data[stack->head - 2];
 
 				if (a.type.base_type == EMPATHY_VALUE_BASE_TYPE_ATOM)
 					return EMPATHY_INVALID_OPERAND_TYPE;
@@ -756,6 +763,7 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 					default: assert(0); return EMPATHY_INTERNAL_ERROR;
 				}
 
+				stack->head -= 2;
 				stack->data[stack->head++] = value;
 			}
 			break;
@@ -765,8 +773,8 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 				if (stack->head <= 1)
 					return EMPATHY_STACK_UNDERFLOW;
 
-				Empathy_Value b = stack->data[--stack->head];
-				Empathy_Value a = stack->data[--stack->head];
+				Empathy_Value b = stack->data[stack->head - 1];
+				Empathy_Value a = stack->data[stack->head - 2];
 
 				if (a.type.base_type == EMPATHY_VALUE_BASE_TYPE_ATOM)
 					return EMPATHY_INVALID_OPERAND_TYPE;
@@ -795,6 +803,7 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 					default: assert(0); return EMPATHY_INTERNAL_ERROR;
 				}
 
+				stack->head -= 2;
 				stack->data[stack->head++] = value;
 			}
 			break;
@@ -804,8 +813,8 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 				if (stack->head <= 1)
 					return EMPATHY_STACK_UNDERFLOW;
 
-				Empathy_Value b = stack->data[--stack->head];
-				Empathy_Value a = stack->data[--stack->head];
+				Empathy_Value b = stack->data[stack->head - 1];
+				Empathy_Value a = stack->data[stack->head - 2];
 
 				if (a.type.base_type == EMPATHY_VALUE_BASE_TYPE_ATOM)
 					return EMPATHY_INVALID_OPERAND_TYPE;
@@ -834,6 +843,7 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 					default: assert(0); return EMPATHY_INTERNAL_ERROR;
 				}
 
+				stack->head -= 2;
 				stack->data[stack->head++] = value;
 			}
 			break;
@@ -843,8 +853,8 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 				if (stack->head <= 1)
 					return EMPATHY_STACK_UNDERFLOW;
 
-				Empathy_Value b = stack->data[--stack->head];
-				Empathy_Value a = stack->data[--stack->head];
+				Empathy_Value b = stack->data[stack->head - 1];
+				Empathy_Value a = stack->data[stack->head - 2];
 
 				if (a.type.base_type == EMPATHY_VALUE_BASE_TYPE_ATOM)
 					return EMPATHY_INVALID_OPERAND_TYPE;
@@ -873,6 +883,7 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 					default: assert(0); return EMPATHY_INTERNAL_ERROR;
 				}
 
+				stack->head -= 2;
 				stack->data[stack->head++] = value;
 			}
 			break;
@@ -897,7 +908,7 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 				if (stack->head == 0)
 					return EMPATHY_STACK_UNDERFLOW;
 
-				Empathy_Value value = stack->data[--stack->head];
+				Empathy_Value value = stack->data[stack->head - 1];
 				if (value.type.base_type != EMPATHY_VALUE_BASE_TYPE_UINT8)
 					return EMPATHY_INVALID_OPERAND_TYPE;
 
@@ -906,6 +917,8 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 					machine->instruction_pointer = jump_target;
 					instruction_size = 0;
 				}
+
+				stack->head -= 1;
 			}
 			break;
 
@@ -918,7 +931,7 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 				if (stack->head == 0)
 					return EMPATHY_STACK_UNDERFLOW;
 
-				Empathy_Value value = stack->data[--stack->head];
+				Empathy_Value value = stack->data[stack->head - 1];
 				if (value.type.base_type != EMPATHY_VALUE_BASE_TYPE_UINT8)
 					return EMPATHY_INVALID_OPERAND_TYPE;
 
@@ -927,6 +940,8 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 					machine->instruction_pointer = jump_target;
 					instruction_size = 0;
 				}
+
+				stack->head -= 1;
 			}
 			break;
 
@@ -968,10 +983,13 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 
 			case IMPL_OPCODE_END:
 			{
+				machine->instruction_pointer += instruction_size;
 				return EMPATHY_EXECUTION_END;
 			}
 			break;
 		}
+
+		machine->instruction_pointer += instruction_size;
 	}
 
 	return EMPATHY_EXECUTION_BUDGET_EXCEEDED;
