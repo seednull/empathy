@@ -56,12 +56,6 @@ typedef enum Impl_Opcode_t
 	IMPL_OPCODE_ENUM_FORCE32 = 0x7FFFFFFF,
 } Impl_Opcode;
 
-typedef struct Impl_InstructionDataAddress_t
-{
-	uint32_t table;
-	uint32_t index;
-} Impl_InstructionDataAddress;
-
 static uint64_t base_type_sizes[EMPATHY_VALUE_BASE_TYPE_ENUM_MAX] =
 {
 	// uint / int
@@ -84,7 +78,7 @@ static uint64_t instruction_sizes[IMPL_OPCODE_ENUM_MAX] =
 	9,
 
 	// parameters
-	9, 9,
+	5, 5,
 
 	// stack
 	1, 1,
@@ -342,34 +336,22 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 				if (stack->head >= stack->size)
 					return EMPATHY_STACK_OVERFLOW;
 
-				Impl_InstructionDataAddress address = *(const Impl_InstructionDataAddress *)instruction_data;
+				uint32_t index = *(const uint32_t *)instruction_data;
+				assert(index < layout->num_parameters);
 
-				// TODO: replace this by O(1) hashmap lookup or design better <table; index> mapping to array index
-				const Impl_ProgramLayoutParameter *parameter = NULL;
-				for (uint64_t i = 0; i < layout->num_parameters; ++i)
-				{
-					const Impl_ProgramLayoutParameter *src_parameter = &layout->parameters[i];
-					if (src_parameter->table != address.table)
-						continue;
-
-					if (src_parameter->index != address.index)
-						continue;
-
-					parameter = src_parameter;
-					break;
-				}
-
+				const Impl_ProgramLayoutParameter *parameter = &layout->parameters[index];
 				assert(parameter);
+
 				if ((parameter->access & EMPATHY_PARAMETER_ACCESS_FLAGS_READ) == 0)
 					return EMPATHY_PARAMETER_NOT_READABLE;
 
 				uint64_t parameter_offset = parameter->offset;
 				uint64_t parameter_size = base_type_sizes[parameter->type.base_type];
 
-				assert(address.table < machine->max_bindings);
+				assert(parameter->table < machine->max_bindings);
 
-				const uint8_t *table = (uint8_t *)machine->bindings[address.table].data;
-				const uint64_t table_size = machine->bindings[address.table].size;
+				const uint8_t *table = (uint8_t *)machine->bindings[parameter->table].data;
+				const uint64_t table_size = machine->bindings[parameter->table].size;
 				assert(table);
 
 				if (parameter_offset + parameter_size > table_size)
@@ -405,22 +387,10 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 				if (stack->head == 0)
 					return EMPATHY_STACK_UNDERFLOW;
 
-				Impl_InstructionDataAddress address = *(const Impl_InstructionDataAddress *)instruction_data;
+				uint32_t index = *(const uint32_t *)instruction_data;
+				assert(index < layout->num_parameters);
 
-				// TODO: replace this by O(1) hashmap lookup or design better <table; index> mapping to array index
-				const Impl_ProgramLayoutParameter *parameter = NULL;
-				for (uint64_t i = 0; i < layout->num_parameters; ++i)
-				{
-					const Impl_ProgramLayoutParameter *src_parameter = &layout->parameters[i];
-					if (src_parameter->table != address.table)
-						continue;
-
-					if (src_parameter->index != address.index)
-						continue;
-
-					parameter = src_parameter;
-					break;
-				}
+				const Impl_ProgramLayoutParameter *parameter = &layout->parameters[index];
 				assert(parameter);
 
 				if ((parameter->access & EMPATHY_PARAMETER_ACCESS_FLAGS_WRITE) == 0)
@@ -439,10 +409,10 @@ Empathy_Result impl_bytecodeExecute(Impl_Machine *machine, uint32_t budget, cons
 				uint64_t value_size = base_type_sizes[value.type.base_type];
 
 				assert(value_size == parameter_size);
-				assert(address.table < machine->max_bindings);
+				assert(parameter->table < machine->max_bindings);
 
-				uint8_t *table = (uint8_t *)machine->bindings[address.table].data;
-				uint64_t table_size = machine->bindings[address.table].size;
+				uint8_t *table = (uint8_t *)machine->bindings[parameter->table].data;
+				uint64_t table_size = machine->bindings[parameter->table].size;
 				assert(table);
 
 				if (parameter_offset + parameter_size > table_size)

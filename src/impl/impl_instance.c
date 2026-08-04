@@ -71,41 +71,22 @@ static Empathy_Result impl_instanceCreateProgramLayout(Empathy_Instance this, co
 		}
 	}
 
-	if (desc->num_tables > 0)
+	if (desc->num_parameters > 0)
 	{
-		assert(desc->tables);
+		assert(desc->parameters);
 
-		uint64_t num_parameters = 0;
-		for (uint64_t i = 0; i < desc->num_tables; ++i)
+		result.num_parameters = desc->num_parameters;
+		result.parameters = (Impl_ProgramLayoutParameter *)malloc(sizeof(Impl_ProgramLayoutParameter) * desc->num_parameters);
+
+		for (uint64_t i = 0; i < desc->num_parameters; ++i)
 		{
-			const Empathy_ParameterTableDesc *table = &desc->tables[i];
-			assert(table);
-			assert(table->num_parameters > 0);
+			const Empathy_ParameterDesc *src_parameter = &desc->parameters[i];
+			Impl_ProgramLayoutParameter *dst_parameter = &result.parameters[i];
 
-			num_parameters += table->num_parameters;
-		}
-
-		result.num_parameters = num_parameters;
-		result.parameters = (Impl_ProgramLayoutParameter *)malloc(sizeof(Impl_ProgramLayoutParameter) * num_parameters);
-
-		uint64_t current_parameter = 0;
-		for (uint64_t i = 0; i < desc->num_tables; ++i)
-		{
-			const Empathy_ParameterTableDesc *table = &desc->tables[i];
-			assert(table);
-			assert(table->num_parameters > 0);
-
-			for (uint64_t j = 0; j < table->num_parameters; ++j)
-			{
-				const Empathy_ParameterDesc *src_parameter = &table->parameters[j];
-				Impl_ProgramLayoutParameter *dst_parameter = &result.parameters[current_parameter++];
-
-				dst_parameter->index = src_parameter->index;
-				dst_parameter->table = table->index;
-				dst_parameter->type = src_parameter->type;
-				dst_parameter->access = src_parameter->access;
-				dst_parameter->offset = src_parameter->offset;
-			}
+			dst_parameter->table = src_parameter->table;
+			dst_parameter->type = src_parameter->type;
+			dst_parameter->access = src_parameter->access;
+			dst_parameter->offset = src_parameter->offset;
 		}
 	}
 
@@ -131,7 +112,6 @@ static Empathy_Result impl_instanceCreateProgramLayout(Empathy_Instance this, co
 			const Empathy_YieldDesc *src_yield = &desc->yields[i];
 			Impl_ProgramLayoutYield *dst_yield = &result.yields[i];
 
-			dst_yield->index = src_yield->index;
 			dst_yield->num_resume_values = src_yield->num_resume_values;
 			dst_yield->base_resume_value = current_argument;
 

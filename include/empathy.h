@@ -149,7 +149,7 @@ typedef struct Empathy_AtomTypeDesc_t
 
 typedef struct Empathy_ParameterDesc_t
 {
-	uint32_t index;
+	uint32_t table;
 
 	Empathy_ValueType type;
 	Empathy_ParameterAccessFlags access;
@@ -157,18 +157,8 @@ typedef struct Empathy_ParameterDesc_t
 	uint64_t offset;
 } Empathy_ParameterDesc;
 
-typedef struct Empathy_ParameterTableDesc_t
-{
-	uint32_t index;
-
-	uint64_t num_parameters;
-	const Empathy_ParameterDesc *parameters;
-} Empathy_ParameterTableDesc;
-
 typedef struct Empathy_YieldDesc
 {
-	uint32_t index;
-
 	uint64_t num_resume_values;
 	const Empathy_ValueType *resume_value_types;
 } Empathy_YieldDesc;
@@ -178,8 +168,8 @@ typedef struct Empathy_ProgramLayoutDesc_t
 	uint64_t num_atom_types;
 	const Empathy_AtomTypeDesc *atom_types;
 
-	uint64_t num_tables;
-	const Empathy_ParameterTableDesc *tables;
+	uint64_t num_parameters;
+	const Empathy_ParameterDesc *parameters;
 
 	uint64_t num_yields;
 	const Empathy_YieldDesc *yields;

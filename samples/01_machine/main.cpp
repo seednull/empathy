@@ -18,27 +18,20 @@ static LocalState local_state = {};
 
 void testMachine(Empathy_Instance instance)
 {
-	Empathy_ParameterDesc world_parameters[] =
+	Empathy_ParameterDesc parameters[] =
 	{
+		// world
 		{0, {EMPATHY_VALUE_BASE_TYPE_UINT32, 0}, EMPATHY_PARAMETER_ACCESS_FLAGS_READ, offsetof(WorldState, day)},
-		{1, {EMPATHY_VALUE_BASE_TYPE_FLOAT32, 0}, EMPATHY_PARAMETER_ACCESS_FLAGS_READ, offsetof(WorldState, time)},
-	};
+		{0, {EMPATHY_VALUE_BASE_TYPE_FLOAT32, 0}, EMPATHY_PARAMETER_ACCESS_FLAGS_READ, offsetof(WorldState, time)},
 
-	Empathy_ParameterDesc local_parameters[] =
-	{
-		{0, {EMPATHY_VALUE_BASE_TYPE_FLOAT32, 0}, EMPATHY_PARAMETER_ACCESS_FLAGS_READ_WRITE, offsetof(LocalState, time)},
-	};
-
-	Empathy_ParameterTableDesc tables[]
-	{
-		{0, 2, world_parameters},
-		{1, 1, local_parameters},
+		// local
+		{1, {EMPATHY_VALUE_BASE_TYPE_FLOAT32, 0}, EMPATHY_PARAMETER_ACCESS_FLAGS_READ_WRITE, offsetof(LocalState, time)},
 	};
 
 	Empathy_ProgramLayoutDesc layout_desc =
 	{
 		0, nullptr,
-		2, tables,
+		3, parameters,
 		0, nullptr,
 	};
 
@@ -47,14 +40,14 @@ void testMachine(Empathy_Instance instance)
 	assert(result == EMPATHY_SUCCESS);
 
 	/*
-	 * load world_state, time
-	 * store local_state, time
+	 * load world_state.time
+	 * store local_state.time
 	 * end
 	 */
 	uint8_t payload[] =
 	{
-		0x0B, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
-		0x0C, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		0x0B, 0x01, 0x00, 0x00, 0x00,
+		0x0C, 0x02, 0x00, 0x00, 0x00,
 		0x22,
 	};
 

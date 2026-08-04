@@ -21,7 +21,6 @@ typedef struct Impl_ProgramLayoutAtomType_t
 
 typedef struct Impl_ProgramLayoutParameter_t
 {
-	uint32_t index;
 	uint32_t table;
 
 	Empathy_ValueType type;
@@ -32,7 +31,6 @@ typedef struct Impl_ProgramLayoutParameter_t
 
 typedef struct Impl_ProgramLayoutYield_t
 {
-	uint32_t index;
 	uint64_t num_resume_values;
 	uint64_t base_resume_value;
 } Impl_ProgramLayoutYield;
