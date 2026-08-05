@@ -158,7 +158,7 @@ typedef struct Impl_ExecutionContext_t
 	Impl_MachineBinding *bindings;
 	uint64_t max_bindings;
 	uint64_t instruction_pointer;
-	Impl_OpcodeMode allowed_mode;
+	Impl_OpcodeMode mode;
 } Impl_ExecutionContext;
 
 Empathy_Result impl_bytecodeValidate(uint64_t size, const void *data, const Impl_ProgramLayout *layout);

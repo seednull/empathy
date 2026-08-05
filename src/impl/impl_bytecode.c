@@ -132,7 +132,7 @@ static EMPATHY_INLINE Impl_OpcodeMode impl_bytecodeGetInstructionMode(Impl_Opcod
 		// control
 		case IMPL_OPCODE_JUMP:
 		case IMPL_OPCODE_JUMP_FALSE:
-		case IMPL_OPCODE_JUMP_TRUE: return IMPL_OPCODE_MODE_EXECUTION;
+		case IMPL_OPCODE_JUMP_TRUE: return IMPL_OPCODE_MODE_BOTH;
 
 		// predicate
 		case IMPL_OPCODE_REJECT:
@@ -213,7 +213,7 @@ Empathy_Result impl_bytecodeExecute(Impl_ExecutionContext *context, uint32_t bud
 			return EMPATHY_INVALID_INSTRUCTION_OPCODE;
 
 		Impl_OpcodeMode mode = impl_bytecodeGetInstructionMode(opcode);
-		if ((mode & context->allowed_mode) == 0)
+		if ((mode & context->mode) == 0)
 			return EMPATHY_INVALID_INSTRUCTION_OPCODE;
 
 		const uint8_t *instruction_data = bytes + context->instruction_pointer + 1;
