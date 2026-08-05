@@ -360,6 +360,7 @@ Empathy_Result impl_instanceRun(Empathy_Instance this, Empathy_Machine machine, 
 	context.bindings = machine_ptr->bindings;
 	context.max_bindings = machine_ptr->max_bindings;
 	context.instruction_pointer = machine_ptr->instruction_pointer;
+	context.allowed_mode = IMPL_OPCODE_MODE_EXECUTION;
 
 	Empathy_Result result = impl_bytecodeExecute(&context, budget);
 

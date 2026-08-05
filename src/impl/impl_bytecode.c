@@ -3,105 +3,153 @@
 #include "assert.h"
 #include "string.h"
 
-typedef enum Impl_Opcode_t
+static EMPATHY_INLINE uint64_t impl_bytecodeGetBaseTypeSize(Empathy_ValueBaseType base_type)
 {
-	IMPL_OPCODE_PUSH_U8 = 0,
-	IMPL_OPCODE_PUSH_U16,
-	IMPL_OPCODE_PUSH_U32,
-	IMPL_OPCODE_PUSH_U64,
-	IMPL_OPCODE_PUSH_I8,
-	IMPL_OPCODE_PUSH_I16,
-	IMPL_OPCODE_PUSH_I32,
-	IMPL_OPCODE_PUSH_I64,
-	IMPL_OPCODE_PUSH_F32,
-	IMPL_OPCODE_PUSH_F64,
-	IMPL_OPCODE_PUSH_ATOM,
+	switch (base_type)
+	{
+		case EMPATHY_VALUE_BASE_TYPE_UINT8:
+		case EMPATHY_VALUE_BASE_TYPE_INT8: return 1;
 
-	IMPL_OPCODE_LOAD,
-	IMPL_OPCODE_STORE,
+		case EMPATHY_VALUE_BASE_TYPE_UINT16:
+		case EMPATHY_VALUE_BASE_TYPE_INT16: return 2;
 
-	IMPL_OPCODE_DROP,
-	IMPL_OPCODE_DUP,
+		case EMPATHY_VALUE_BASE_TYPE_UINT32:
+		case EMPATHY_VALUE_BASE_TYPE_INT32:
+		case EMPATHY_VALUE_BASE_TYPE_FLOAT32: return 4;
 
-	IMPL_OPCODE_ADD,
-	IMPL_OPCODE_SUB,
-	IMPL_OPCODE_MUL,
-	IMPL_OPCODE_DIV,
+		case EMPATHY_VALUE_BASE_TYPE_UINT64:
+		case EMPATHY_VALUE_BASE_TYPE_INT64:
+		case EMPATHY_VALUE_BASE_TYPE_FLOAT64:
+		case EMPATHY_VALUE_BASE_TYPE_ATOM: return 8;
 
-	IMPL_OPCODE_EQUAL,
-	IMPL_OPCODE_NOT_EQUAL,
+		default: assert(0); return UINT64_MAX;
+	}
+}
 
-	IMPL_OPCODE_LESS,
-	IMPL_OPCODE_LESS_EQUAL,
-	IMPL_OPCODE_GREATER,
-	IMPL_OPCODE_GREATER_EQUAL,
-
-	IMPL_OPCODE_JUMP,
-	IMPL_OPCODE_JUMP_FALSE,
-	IMPL_OPCODE_JUMP_TRUE,
-
-	IMPL_OPCODE_REJECT,
-	IMPL_OPCODE_REJECT_FALSE,
-	IMPL_OPCODE_REJECT_TRUE,
-	IMPL_OPCODE_MATCH,
-
-	IMPL_OPCODE_BEGIN_YIELD,
-	IMPL_OPCODE_YIELD,
-	IMPL_OPCODE_END,
-
-	IMPL_OPCODE_ENUM_START = IMPL_OPCODE_PUSH_U8,
-	IMPL_OPCODE_ENUM_END = IMPL_OPCODE_END,
-
-	IMPL_OPCODE_ENUM_MAX,
-	IMPL_OPCODE_ENUM_FORCE32 = 0x7FFFFFFF,
-} Impl_Opcode;
-
-static uint64_t base_type_sizes[EMPATHY_VALUE_BASE_TYPE_ENUM_MAX] =
+static EMPATHY_INLINE uint64_t impl_bytecodeGetInstructionSize(Impl_Opcode opcode)
 {
-	// uint / int
-	1, 2, 4, 8,
-	1, 2, 4, 8,
+	switch (opcode)
+	{
+		// constant
+		case IMPL_OPCODE_PUSH_U8:
+		case IMPL_OPCODE_PUSH_I8: return 2;
 
-	// float / double
-	4, 8,
+		case IMPL_OPCODE_PUSH_U16:
+		case IMPL_OPCODE_PUSH_I16: return 3;
 
-	// atom
-	8
-};
+		case IMPL_OPCODE_PUSH_U32:
+		case IMPL_OPCODE_PUSH_I32:
+		case IMPL_OPCODE_PUSH_F32: return 5;
 
-static uint64_t instruction_sizes[IMPL_OPCODE_ENUM_MAX] =
+		case IMPL_OPCODE_PUSH_U64:
+		case IMPL_OPCODE_PUSH_I64:
+		case IMPL_OPCODE_PUSH_F64:
+		case IMPL_OPCODE_PUSH_ATOM: return 9;
+
+		// parameter
+		case IMPL_OPCODE_LOAD:
+		case IMPL_OPCODE_STORE: return 5;
+
+		// stack
+		case IMPL_OPCODE_DROP:
+		case IMPL_OPCODE_DUP: return 1;
+
+		// arithmetic
+		case IMPL_OPCODE_ADD:
+		case IMPL_OPCODE_SUB:
+		case IMPL_OPCODE_MUL:
+		case IMPL_OPCODE_DIV: return 1;
+
+		// logic
+		case IMPL_OPCODE_EQUAL:
+		case IMPL_OPCODE_NOT_EQUAL:
+		case IMPL_OPCODE_LESS:
+		case IMPL_OPCODE_LESS_EQUAL:
+		case IMPL_OPCODE_GREATER:
+		case IMPL_OPCODE_GREATER_EQUAL: return 1;
+
+		// control
+		case IMPL_OPCODE_JUMP:
+		case IMPL_OPCODE_JUMP_FALSE:
+		case IMPL_OPCODE_JUMP_TRUE: return 9;
+
+		// predicate
+		case IMPL_OPCODE_REJECT:
+		case IMPL_OPCODE_REJECT_FALSE:
+		case IMPL_OPCODE_REJECT_TRUE:
+		case IMPL_OPCODE_MATCH: return 1;
+
+		// yield
+		case IMPL_OPCODE_BEGIN_YIELD: return 1;
+		case IMPL_OPCODE_YIELD: return 5;
+
+		// end
+		case IMPL_OPCODE_END: return 1;
+
+		default: assert(0); return UINT64_MAX;
+	}
+}
+
+static EMPATHY_INLINE Impl_OpcodeMode impl_bytecodeGetInstructionMode(Impl_Opcode opcode)
 {
-	// push
-	2, 3, 5, 9,
-	2, 3, 5, 9,
-	5, 9,
-	9,
+	switch (opcode)
+	{
+		// constant
+		case IMPL_OPCODE_PUSH_U8:
+		case IMPL_OPCODE_PUSH_U16:
+		case IMPL_OPCODE_PUSH_U32:
+		case IMPL_OPCODE_PUSH_U64:
+		case IMPL_OPCODE_PUSH_I8:
+		case IMPL_OPCODE_PUSH_I16:
+		case IMPL_OPCODE_PUSH_I32:
+		case IMPL_OPCODE_PUSH_I64:
+		case IMPL_OPCODE_PUSH_F32:
+		case IMPL_OPCODE_PUSH_F64:
+		case IMPL_OPCODE_PUSH_ATOM: return IMPL_OPCODE_MODE_BOTH;
 
-	// parameters
-	5, 5,
+		// parameter
+		case IMPL_OPCODE_LOAD: return IMPL_OPCODE_MODE_BOTH;
+		case IMPL_OPCODE_STORE: return IMPL_OPCODE_MODE_EXECUTION;
 
-	// stack
-	1, 1,
+		// stack
+		case IMPL_OPCODE_DROP:
+		case IMPL_OPCODE_DUP: return IMPL_OPCODE_MODE_BOTH;
 
-	// math
-	1, 1, 1, 1,
+		// arithmetic
+		case IMPL_OPCODE_ADD:
+		case IMPL_OPCODE_SUB:
+		case IMPL_OPCODE_MUL:
+		case IMPL_OPCODE_DIV: return IMPL_OPCODE_MODE_BOTH;
 
-	// logic
-	1, 1,
-	1, 1, 1, 1,
+		// logic
+		case IMPL_OPCODE_EQUAL:
+		case IMPL_OPCODE_NOT_EQUAL:
+		case IMPL_OPCODE_LESS:
+		case IMPL_OPCODE_LESS_EQUAL:
+		case IMPL_OPCODE_GREATER:
+		case IMPL_OPCODE_GREATER_EQUAL: return IMPL_OPCODE_MODE_BOTH;
 
-	// control
-	9, 9, 9,
+		// control
+		case IMPL_OPCODE_JUMP:
+		case IMPL_OPCODE_JUMP_FALSE:
+		case IMPL_OPCODE_JUMP_TRUE: return IMPL_OPCODE_MODE_EXECUTION;
 
-	// predicates
-	1, 1, 1, 1,
+		// predicate
+		case IMPL_OPCODE_REJECT:
+		case IMPL_OPCODE_REJECT_FALSE:
+		case IMPL_OPCODE_REJECT_TRUE:
+		case IMPL_OPCODE_MATCH: return IMPL_OPCODE_MODE_PREDICATE;
 
-	// yield
-	1, 5,
+		// yield
+		case IMPL_OPCODE_BEGIN_YIELD:
+		case IMPL_OPCODE_YIELD: return IMPL_OPCODE_MODE_EXECUTION;
 
-	// end
-	1,
-};
+		// end
+		case IMPL_OPCODE_END: return IMPL_OPCODE_MODE_EXECUTION;
+
+		default: assert(0); return IMPL_OPCODE_MODE_ENUM_FORCE32;
+	}
+}
 
 Empathy_Result impl_bytecodeValidate(uint64_t size, const void *data, const Impl_ProgramLayout *layout)
 {
@@ -121,7 +169,7 @@ Empathy_Result impl_bytecodeValidate(uint64_t size, const void *data, const Impl
 		if (opcode < IMPL_OPCODE_ENUM_START || opcode > IMPL_OPCODE_ENUM_END)
 			return EMPATHY_INVALID_INSTRUCTION_OPCODE;
 
-		uint64_t instruction_size = instruction_sizes[opcode];
+		uint64_t instruction_size = impl_bytecodeGetInstructionSize(opcode);
 		if (offset + instruction_size > size)
 			return EMPATHY_INVALID_INSTRUCTION_OPCODE;
 
@@ -160,8 +208,12 @@ Empathy_Result impl_bytecodeExecute(Impl_ExecutionContext *context, uint32_t bud
 		if (opcode < IMPL_OPCODE_ENUM_START || opcode > IMPL_OPCODE_ENUM_END)
 			return EMPATHY_INVALID_INSTRUCTION_OPCODE;
 
-		uint64_t instruction_size = instruction_sizes[opcode];
+		uint64_t instruction_size = impl_bytecodeGetInstructionSize(opcode);
 		if (context->instruction_pointer + instruction_size > program->size)
+			return EMPATHY_INVALID_INSTRUCTION_OPCODE;
+
+		Impl_OpcodeMode mode = impl_bytecodeGetInstructionMode(opcode);
+		if ((mode & context->allowed_mode) == 0)
 			return EMPATHY_INVALID_INSTRUCTION_OPCODE;
 
 		const uint8_t *instruction_data = bytes + context->instruction_pointer + 1;
@@ -350,7 +402,7 @@ Empathy_Result impl_bytecodeExecute(Impl_ExecutionContext *context, uint32_t bud
 					return EMPATHY_PARAMETER_NOT_READABLE;
 
 				uint64_t parameter_offset = parameter->offset;
-				uint64_t parameter_size = base_type_sizes[parameter->type.base_type];
+				uint64_t parameter_size = impl_bytecodeGetBaseTypeSize(parameter->type.base_type);
 
 				assert(parameter->table < context->max_bindings);
 
@@ -409,8 +461,8 @@ Empathy_Result impl_bytecodeExecute(Impl_ExecutionContext *context, uint32_t bud
 					return EMPATHY_ATOM_TYPE_MISMATCH;
 
 				uint64_t parameter_offset = parameter->offset;
-				uint64_t parameter_size = base_type_sizes[parameter->type.base_type];
-				uint64_t value_size = base_type_sizes[value.type.base_type];
+				uint64_t parameter_size = impl_bytecodeGetBaseTypeSize(parameter->type.base_type);
+				uint64_t value_size = impl_bytecodeGetBaseTypeSize(value.type.base_type);
 
 				assert(value_size == parameter_size);
 				assert(parameter->table < context->max_bindings);
