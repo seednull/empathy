@@ -32,6 +32,7 @@
 #endif
 
 #define EMPATHY_DEFINE_HANDLE(TYPE) typedef uint64_t TYPE
+#define EMPATHY_PROGRAM_OFFSET_NONE UINT64_MAX
 
 #ifdef __cplusplus
 extern "C" {
@@ -55,6 +56,8 @@ typedef enum Empathy_Result_t
 	EMPATHY_INVALID_INSTRUCTION_OPCODE,
 	EMPATHY_INVALID_INSTRUCTION_DATA,
 	EMPATHY_INVALID_OPERAND_TYPE,
+	EMPATHY_PROGRAM_NOT_BOUND,
+	EMPATHY_PROGRAM_ENTRY_POINT_NOT_BOUND,
 	EMPATHY_PARAMETER_NOT_READABLE,
 	EMPATHY_PARAMETER_NOT_WRITABLE,
 	EMPATHY_PARAMETER_TABLE_OUT_OF_BOUNDS_READ,
@@ -160,33 +163,43 @@ typedef struct Empathy_ParameterDesc_t
 
 typedef struct Empathy_YieldDesc
 {
-	uint64_t num_resume_values;
+	uint32_t num_resume_values;
 	const Empathy_ValueType *resume_value_types;
 } Empathy_YieldDesc;
 
 typedef struct Empathy_ProgramLayoutDesc_t
 {
-	uint64_t num_atom_types;
+	uint32_t num_atom_types;
 	const Empathy_AtomTypeDesc *atom_types;
 
-	uint64_t num_parameters;
+	uint32_t num_parameters;
 	const Empathy_ParameterDesc *parameters;
 
-	uint64_t num_yields;
+	uint32_t num_yields;
 	const Empathy_YieldDesc *yields;
 } Empathy_ProgramLayoutDesc;
+
+typedef struct Empathy_ProgramEntryPointDesc_t
+{
+	uint64_t execution_offset;
+	uint64_t predicate_offset;
+} Empathy_ProgramEntryPointDesc;
 
 typedef struct Empathy_ProgramDesc_t
 {
 	Empathy_ProgramLayout layout;
+
+	uint32_t num_entry_points;
+	const Empathy_ProgramEntryPointDesc *entry_points;
+
 	uint64_t size;
 	const void *data;
 } Empathy_ProgramDesc;
 
 typedef struct Empathy_MachineDesc_t
 {
-	uint64_t execution_stack_size;
-	uint64_t predicate_stack_size;
+	uint32_t execution_stack_size;
+	uint32_t predicate_stack_size;
 	uint32_t max_parameter_tables;
 	uint32_t instruction_limit;
 } Empathy_MachineDesc;
@@ -202,6 +215,7 @@ typedef Empathy_Result (*PFN_empathyDestroyMachine)(Empathy_Instance instance, E
 typedef Empathy_Result (*PFN_empathyDestroyInstance)(Empathy_Instance instance);
 
 typedef Empathy_Result (*PFN_empathyBindProgram)(Empathy_Instance instance, Empathy_Machine machine, Empathy_Program program);
+typedef Empathy_Result (*PFN_empathyBindProgramEntryPoint)(Empathy_Instance instance, Empathy_Machine machine, uint32_t index);
 typedef Empathy_Result (*PFN_empathyBindParameterTable)(Empathy_Instance instance, Empathy_Machine machine, uint32_t index, uint64_t size, void *data);
 typedef Empathy_Result (*PFN_empathyRun)(Empathy_Instance instance, Empathy_Machine machine);
 
@@ -218,6 +232,7 @@ typedef struct Empathy_InstanceTable_t
 	PFN_empathyDestroyInstance destroyInstance;
 
 	PFN_empathyBindProgram bindProgram;
+	PFN_empathyBindProgramEntryPoint bindProgramEntryPoint;
 	PFN_empathyBindParameterTable bindParameterTable;
 	PFN_empathyRun run;
 } Empathy_InstanceTable;
@@ -237,6 +252,7 @@ EMPATHY_APIENTRY Empathy_Result empathyDestroyMachine(Empathy_Instance instance,
 EMPATHY_APIENTRY Empathy_Result empathyDestroyInstance(Empathy_Instance instance);
 
 EMPATHY_APIENTRY Empathy_Result empathyBindProgram(Empathy_Instance instance, Empathy_Machine machine, Empathy_Program program);
+EMPATHY_APIENTRY Empathy_Result empathyBindProgramEntryPoint(Empathy_Instance instance, Empathy_Machine machine, uint32_t index);
 EMPATHY_APIENTRY Empathy_Result empathyBindParameterTable(Empathy_Instance instance, Empathy_Machine machine, uint32_t index, uint64_t size, void *data);
 EMPATHY_APIENTRY Empathy_Result empathyRun(Empathy_Instance instance, Empathy_Machine machine);
 #endif

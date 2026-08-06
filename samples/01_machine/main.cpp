@@ -51,11 +51,16 @@ void testMachine(Empathy_Instance instance)
 		0x22,
 	};
 
+	Empathy_ProgramEntryPointDesc entries[] =
+	{
+		0, EMPATHY_PROGRAM_OFFSET_NONE
+	};
+
 	Empathy_ProgramDesc program_desc =
 	{
 		layout,
-		sizeof(payload),
-		payload
+		1, entries,
+		sizeof(payload), payload,
 	};
 
 	Empathy_Program program = EMPATHY_NULL_HANDLE;
@@ -75,6 +80,9 @@ void testMachine(Empathy_Instance instance)
 	assert(result == EMPATHY_SUCCESS);
 
 	result = empathyBindProgram(instance, machine, program);
+	assert(result == EMPATHY_SUCCESS);
+
+	result = empathyBindProgramEntryPoint(instance, machine, 0);
 	assert(result == EMPATHY_SUCCESS);
 
 	result = empathyBindParameterTable(instance, machine, 0, sizeof(WorldState), &world_state);

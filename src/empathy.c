@@ -131,6 +131,18 @@ Empathy_Result empathyBindProgram(Empathy_Instance instance, Empathy_Machine mac
 	return ptr->vtbl->bindProgram(instance, machine, program);
 }
 
+Empathy_Result empathyBindProgramEntryPoint(Empathy_Instance instance, Empathy_Machine machine, uint32_t index)
+{
+	if (instance == EMPATHY_NULL_HANDLE)
+		return EMPATHY_INVALID_INSTANCE;
+
+	Empathy_InstanceInternal *ptr = (Empathy_InstanceInternal *)instance;
+	assert(ptr->vtbl);
+	assert(ptr->vtbl->bindProgramEntryPoint);
+
+	return ptr->vtbl->bindProgramEntryPoint(instance, machine, index);
+}
+
 Empathy_Result empathyBindParameterTable(Empathy_Instance instance, Empathy_Machine machine, uint32_t index, uint64_t size, void *data)
 {
 	if (instance == EMPATHY_NULL_HANDLE)

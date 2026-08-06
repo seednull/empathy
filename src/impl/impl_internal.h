@@ -4,6 +4,19 @@
 
 #include "common/pool.h"
 
+typedef enum Impl_MachineState_t
+{
+	IMPL_MACHINE_STATE_UNBOUND = 0,
+	IMPL_MACHINE_STATE_BOUND,
+	IMPL_MACHINE_STATE_RUNNABLE,
+	IMPL_MACHINE_STATE_YIELDED,
+	IMPL_MACHINE_STATE_STOPPED,
+	IMPL_MACHINE_STATE_FAULTED,
+
+	IMPL_MACHINE_STATE_ENUM_MAX,
+	IMPL_MACHINE_STATE_ENUM_FORCE32 = 0x7FFFFFFF,
+} Impl_MachineState;
+
 typedef enum Impl_OpcodeMode_t
 {
 	IMPL_OPCODE_MODE_EXECUTION = 0x00000001,
@@ -102,28 +115,37 @@ typedef struct Impl_ProgramLayoutParameter_t
 
 typedef struct Impl_ProgramLayoutYield_t
 {
-	uint64_t num_resume_values;
+	uint32_t num_resume_values;
 	uint64_t base_resume_value;
 } Impl_ProgramLayoutYield;
 
 typedef struct Impl_ProgramLayout_t
 {
-	uint64_t num_atom_types;
+	uint32_t num_atom_types;
 	Impl_ProgramLayoutAtomType *atom_types;
 
-	uint64_t num_parameters;
+	uint32_t num_parameters;
 	Impl_ProgramLayoutParameter *parameters;
 
-	uint64_t num_yields;
+	uint32_t num_yields;
 	Impl_ProgramLayoutYield *yields;
 	Empathy_ValueType *yield_resume_value_types;
 } Impl_ProgramLayout;
+
+typedef struct Impl_EntryPoint_t
+{
+	uint64_t execution_offset;
+	uint64_t predicate_offset;
+} Impl_EntryPoint;
 
 typedef struct Impl_Program_t
 {
 	Empathy_ProgramLayout layout;
 	uint64_t size;
 	void *data;
+
+	uint32_t num_entry_points;
+	Impl_EntryPoint *entry_points;
 } Impl_Program;
 
 typedef struct Impl_MachineBinding_t
@@ -135,8 +157,8 @@ typedef struct Impl_MachineBinding_t
 typedef struct Impl_MachineStack_t
 {
 	Empathy_Value *data;
-	uint64_t head;
-	uint64_t size;
+	uint32_t head;
+	uint32_t size;
 } Impl_MachineStack;
 
 typedef struct Impl_Machine_t
@@ -149,6 +171,7 @@ typedef struct Impl_Machine_t
 	uint32_t max_bindings;
 	uint32_t instruction_limit;
 	uint64_t instruction_pointer;
+	Impl_MachineState state;
 } Impl_Machine;
 
 typedef struct Impl_ExecutionContext_t
