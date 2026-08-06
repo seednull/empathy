@@ -10,7 +10,7 @@ typedef enum Impl_MachineState_t
 	IMPL_MACHINE_STATE_BOUND,
 	IMPL_MACHINE_STATE_RUNNABLE,
 	IMPL_MACHINE_STATE_YIELDED,
-	IMPL_MACHINE_STATE_STOPPED,
+	IMPL_MACHINE_STATE_ENDED,
 	IMPL_MACHINE_STATE_FAULTED,
 
 	IMPL_MACHINE_STATE_ENUM_MAX,
@@ -172,7 +172,7 @@ typedef struct Impl_Machine_t
 	uint32_t instruction_limit;
 	uint64_t instruction_pointer;
 	Impl_MachineState execution_state;
-	Empathy_Result execution_result;
+	Empathy_Result fault_result;
 } Impl_Machine;
 
 typedef struct Impl_ExecutionContext_t

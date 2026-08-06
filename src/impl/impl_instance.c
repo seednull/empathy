@@ -407,6 +407,13 @@ Empathy_Result impl_instanceRun(Empathy_Instance this, Empathy_Machine machine)
 	assert(machine_ptr->predicate_stack.size > 0);
 	assert(machine_ptr->predicate_stack.head <= machine_ptr->predicate_stack.size);
 
+	switch (machine_ptr->execution_state)
+	{
+		case IMPL_MACHINE_STATE_UNBOUND: return EMPATHY_PROGRAM_NOT_BOUND;
+		case IMPL_MACHINE_STATE_BOUND: return EMPATHY_PROGRAM_ENTRY_POINT_NOT_BOUND;
+		case IMPL_MACHINE_STATE_FAULTED: return machine_ptr->fault_result;
+	}
+
 	Impl_ProgramLayout *program_layout_ptr = (Impl_ProgramLayout *)empathy_poolGetElement(&instance_ptr->program_layouts, (Empathy_PoolHandle)machine_ptr->layout);
 	assert(program_layout_ptr);
 
@@ -416,17 +423,9 @@ Empathy_Result impl_instanceRun(Empathy_Instance this, Empathy_Machine machine)
 	assert(program_ptr->size);
 	assert(program_ptr->layout == machine_ptr->layout);
 
-	switch (machine_ptr->execution_state)
+	if (machine_ptr->execution_state == IMPL_MACHINE_STATE_YIELDED)
 	{
-		case IMPL_MACHINE_STATE_UNBOUND: return EMPATHY_PROGRAM_NOT_BOUND;
-		case IMPL_MACHINE_STATE_BOUND: return EMPATHY_PROGRAM_ENTRY_POINT_NOT_BOUND;
-		case IMPL_MACHINE_STATE_YIELDED:
-		{
-			// TODO: validate yield stack frame
-		}
-		break;
-		case IMPL_MACHINE_STATE_STOPPED:
-		case IMPL_MACHINE_STATE_FAULTED: return machine_ptr->execution_result;
+		// TODO: validate yield stack frame
 	}
 
 	Impl_ExecutionContext context = {0};
@@ -442,13 +441,19 @@ Empathy_Result impl_instanceRun(Empathy_Instance this, Empathy_Machine machine)
 
 	machine_ptr->instruction_pointer = context.instruction_pointer;
 	machine_ptr->execution_stack.head = context.stack.head;
-	machine_ptr->execution_result = result;
+
+	assert(result != EMPATHY_SUCCESS);
 
 	switch (result)
 	{
-		case EMPATHY_EXECUTION_END: machine_ptr->execution_state = IMPL_MACHINE_STATE_STOPPED; break;
+		case EMPATHY_EXECUTION_END: machine_ptr->execution_state = IMPL_MACHINE_STATE_ENDED; break;
 		case EMPATHY_EXECUTION_YIELD: machine_ptr->execution_state = IMPL_MACHINE_STATE_YIELDED; break;
-		default: machine_ptr->execution_state = IMPL_MACHINE_STATE_FAULTED; break;
+		default:
+		{
+			machine_ptr->execution_state = IMPL_MACHINE_STATE_FAULTED;
+			machine_ptr->fault_result = result;
+		}
+		break;
 	}
 
 	return result;
