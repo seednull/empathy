@@ -456,7 +456,7 @@ Empathy_Result impl_instanceRun(Empathy_Instance this, Empathy_Machine machine)
 			if (expected_type.base_type != value.type.base_type)
 				return EMPATHY_INVALID_RESUME_STATE;
 
-			if (expected_type.atom_type != value.type.atom_type)
+			if (expected_type.base_type == EMPATHY_VALUE_BASE_TYPE_ATOM && expected_type.atom_type != value.type.atom_type)
 				return EMPATHY_INVALID_RESUME_STATE;
 		}
 

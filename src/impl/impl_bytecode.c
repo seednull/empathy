@@ -499,7 +499,7 @@ Empathy_Result impl_bytecodeExecute(Impl_ExecutionContext *context, uint32_t ins
 				if (parameter->type.base_type != value.type.base_type)
 					return EMPATHY_BASE_TYPE_MISMATCH;
 
-				if (parameter->type.atom_type != value.type.atom_type)
+				if (parameter->type.base_type == EMPATHY_VALUE_BASE_TYPE_ATOM && parameter->type.atom_type != value.type.atom_type)
 					return EMPATHY_ATOM_TYPE_MISMATCH;
 
 				uint64_t parameter_offset = parameter->offset;
@@ -731,7 +731,7 @@ Empathy_Result impl_bytecodeExecute(Impl_ExecutionContext *context, uint32_t ins
 				if (a.type.base_type != b.type.base_type)
 					return EMPATHY_BASE_TYPE_MISMATCH;
 
-				if (a.type.atom_type != b.type.atom_type)
+				if (a.type.base_type == EMPATHY_VALUE_BASE_TYPE_ATOM && a.type.atom_type != b.type.atom_type)
 					return EMPATHY_ATOM_TYPE_MISMATCH;
 
 				Empathy_Value value = {0};
@@ -769,7 +769,7 @@ Empathy_Result impl_bytecodeExecute(Impl_ExecutionContext *context, uint32_t ins
 				if (a.type.base_type != b.type.base_type)
 					return EMPATHY_BASE_TYPE_MISMATCH;
 
-				if (a.type.atom_type != b.type.atom_type)
+				if (a.type.base_type == EMPATHY_VALUE_BASE_TYPE_ATOM && a.type.atom_type != b.type.atom_type)
 					return EMPATHY_ATOM_TYPE_MISMATCH;
 
 				Empathy_Value value = {0};
