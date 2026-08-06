@@ -168,7 +168,7 @@ static Empathy_Result impl_instanceCreateMachine(Empathy_Instance this, const Em
 		result.max_bindings = desc->max_parameter_tables;
 		result.bindings = (Impl_MachineBinding *)malloc(sizeof(Impl_MachineBinding) * desc->max_parameter_tables);
 
-		for (uint64_t i = 0; i < desc->max_parameter_tables; ++i)
+		for (uint32_t i = 0; i < desc->max_parameter_tables; ++i)
 		{
 			result.bindings[i].data = NULL;
 			result.bindings[i].size = 0;

@@ -186,7 +186,7 @@ typedef struct Empathy_MachineDesc_t
 {
 	uint64_t execution_stack_size;
 	uint64_t predicate_stack_size;
-	uint64_t max_parameter_tables;
+	uint32_t max_parameter_tables;
 	uint32_t instruction_limit;
 } Empathy_MachineDesc;
 
