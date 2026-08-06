@@ -161,27 +161,53 @@ typedef struct Impl_MachineStack_t
 	uint32_t size;
 } Impl_MachineStack;
 
-typedef struct Impl_Machine_t
+typedef struct Impl_MachineCommonState_t
 {
 	Empathy_ProgramLayout layout;
 	Empathy_Program program;
-	Impl_MachineStack execution_stack;
-	Impl_MachineStack predicate_stack;
+
 	Impl_MachineBinding *bindings;
 	uint32_t max_bindings;
 	uint32_t instruction_limit;
+} Impl_MachineCommonState;
+
+typedef struct Impl_MachineYieldState_t
+{
+	uint32_t stack_base;
+	uint32_t index;
+} Impl_MachineYieldState;
+
+typedef struct Impl_MachineExecutionState_t
+{
+	Impl_MachineStack stack;
 	uint64_t instruction_pointer;
-	Impl_MachineState execution_state;
-	Empathy_Result fault_result;
+} Impl_MachineExecutionState;
+
+typedef struct Impl_MachinePredicateState_t
+{
+	Impl_MachineStack stack;
+} Impl_MachinePredicateState;
+
+typedef struct Impl_Machine_t
+{
+	Impl_MachineCommonState common;
+	Impl_MachineExecutionState execution;
+	Impl_MachinePredicateState predicate;
+	Impl_MachineYieldState yield;
+
+	Impl_MachineState state;
+	Empathy_Result error;
 } Impl_Machine;
 
 typedef struct Impl_ExecutionContext_t
 {
 	const Impl_Program *program;
 	const Impl_ProgramLayout *layout;
-	Impl_MachineStack stack;
+
+	Impl_MachineExecutionState execution;
+	Impl_MachineYieldState yield;
+
 	Impl_MachineBinding *bindings;
-	uint64_t instruction_pointer;
 	uint32_t max_bindings;
 	Impl_OpcodeMode mode;
 } Impl_ExecutionContext;

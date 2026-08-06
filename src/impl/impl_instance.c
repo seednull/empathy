@@ -37,9 +37,9 @@ static void impl_destroyMachine(Impl_Instance *instance_ptr, Impl_Machine *machi
 
 	EMPATHY_UNUSED(instance_ptr);
 
-	free(machine_ptr->execution_stack.data);
-	free(machine_ptr->predicate_stack.data);
-	free(machine_ptr->bindings);
+	free(machine_ptr->common.bindings);
+	free(machine_ptr->execution.stack.data);
+	free(machine_ptr->predicate.stack.data);
 }
 
 /*
@@ -179,28 +179,28 @@ static Empathy_Result impl_instanceCreateMachine(Empathy_Instance this, const Em
 	Impl_Instance *instance_ptr = (Impl_Instance *)this;
 
 	Impl_Machine result = {0};
-	result.program = EMPATHY_NULL_HANDLE;
+	result.common.instruction_limit = desc->instruction_limit;
 
 	if (desc->max_parameter_tables)
 	{
-		result.max_bindings = desc->max_parameter_tables;
-		result.bindings = (Impl_MachineBinding *)malloc(sizeof(Impl_MachineBinding) * desc->max_parameter_tables);
+		result.common.max_bindings = desc->max_parameter_tables;
+		result.common.bindings = (Impl_MachineBinding *)malloc(sizeof(Impl_MachineBinding) * desc->max_parameter_tables);
 
 		for (uint32_t i = 0; i < desc->max_parameter_tables; ++i)
 		{
-			result.bindings[i].data = NULL;
-			result.bindings[i].size = 0;
+			result.common.bindings[i].data = NULL;
+			result.common.bindings[i].size = 0;
 		}
 	}
-	result.instruction_limit = desc->instruction_limit;
 
-	result.execution_stack.size = desc->execution_stack_size;
-	result.execution_stack.data = (Empathy_Value *)malloc(sizeof(Empathy_Value) * desc->execution_stack_size);
 
-	result.predicate_stack.size = desc->predicate_stack_size;
-	result.predicate_stack.data = (Empathy_Value *)malloc(sizeof(Empathy_Value) * desc->predicate_stack_size);
-
-	result.execution_state = IMPL_MACHINE_STATE_UNBOUND;
+	result.execution.stack.size = desc->execution_stack_size;
+	result.execution.stack.data = (Empathy_Value *)malloc(sizeof(Empathy_Value) * desc->execution_stack_size);
+	
+	result.predicate.stack.size = desc->predicate_stack_size;
+	result.predicate.stack.data = (Empathy_Value *)malloc(sizeof(Empathy_Value) * desc->predicate_stack_size);
+	
+	result.state = IMPL_MACHINE_STATE_UNBOUND;
 
 	*machine = (Empathy_Machine)empathy_poolAddElement(&instance_ptr->machines, &result);
 	return EMPATHY_SUCCESS;
@@ -255,10 +255,10 @@ static Empathy_Result impl_instanceDestroyMachine(Empathy_Instance this, Empathy
 	Impl_Instance *instance_ptr = (Impl_Instance *)this;
 	Impl_Machine *machine_ptr = (Impl_Machine *)empathy_poolGetElement(&instance_ptr->machines, handle);
 	assert(machine_ptr);
-	assert(machine_ptr->execution_stack.data);
-	assert(machine_ptr->execution_stack.size > 0);
-	assert(machine_ptr->predicate_stack.data);
-	assert(machine_ptr->predicate_stack.size > 0);
+	assert(machine_ptr->execution.stack.data);
+	assert(machine_ptr->execution.stack.size > 0);
+	assert(machine_ptr->predicate.stack.data);
+	assert(machine_ptr->predicate.stack.size > 0);
 
 	empathy_poolRemoveElement(&instance_ptr->machines, handle);
 
@@ -328,14 +328,16 @@ Empathy_Result impl_instanceBindProgram(Empathy_Instance this, Empathy_Machine m
 	Impl_Machine *machine_ptr = (Impl_Machine *)empathy_poolGetElement(&instance_ptr->machines, (Empathy_PoolHandle)machine);
 	assert(machine_ptr);
 
-	machine_ptr->layout = program_ptr->layout;
-	machine_ptr->program = program;
+	machine_ptr->common.layout = program_ptr->layout;
+	machine_ptr->common.program = program;
 
-	machine_ptr->instruction_pointer = 0;
-	machine_ptr->execution_stack.head = 0;
-	machine_ptr->predicate_stack.head = 0;
+	machine_ptr->execution.instruction_pointer = 0;
+	machine_ptr->execution.stack.head = 0;
 
-	machine_ptr->execution_state = IMPL_MACHINE_STATE_BOUND;
+	machine_ptr->yield.stack_base = UINT32_MAX;
+	machine_ptr->yield.index = UINT32_MAX;
+
+	machine_ptr->state = IMPL_MACHINE_STATE_BOUND;
 
 	return EMPATHY_SUCCESS;
 }
@@ -348,30 +350,30 @@ Empathy_Result impl_instanceBindProgramEntryPoint(Empathy_Instance this, Empathy
 	Impl_Instance *instance_ptr = (Impl_Instance *)this;
 	Impl_Machine *machine_ptr = (Impl_Machine *)empathy_poolGetElement(&instance_ptr->machines, (Empathy_PoolHandle)machine);
 	assert(machine_ptr);
-	assert(machine_ptr->execution_stack.data);
-	assert(machine_ptr->execution_stack.size > 0);
-	assert(machine_ptr->execution_stack.head <= machine_ptr->execution_stack.size);
-	assert(machine_ptr->predicate_stack.data);
-	assert(machine_ptr->predicate_stack.size > 0);
-	assert(machine_ptr->predicate_stack.head <= machine_ptr->predicate_stack.size);
+	assert(machine_ptr->execution.stack.data);
+	assert(machine_ptr->execution.stack.size > 0);
+	assert(machine_ptr->execution.stack.head <= machine_ptr->execution.stack.size);
 
-	if (machine_ptr->execution_state == IMPL_MACHINE_STATE_UNBOUND)
+	if (machine_ptr->state == IMPL_MACHINE_STATE_UNBOUND)
 		return EMPATHY_PROGRAM_NOT_BOUND;
 
-	Impl_ProgramLayout *program_layout_ptr = (Impl_ProgramLayout *)empathy_poolGetElement(&instance_ptr->program_layouts, (Empathy_PoolHandle)machine_ptr->layout);
+	Impl_ProgramLayout *program_layout_ptr = (Impl_ProgramLayout *)empathy_poolGetElement(&instance_ptr->program_layouts, (Empathy_PoolHandle)machine_ptr->common.layout);
 	assert(program_layout_ptr);
 
-	Impl_Program *program_ptr = (Impl_Program *)empathy_poolGetElement(&instance_ptr->programs, (Empathy_PoolHandle)machine_ptr->program);
+	Impl_Program *program_ptr = (Impl_Program *)empathy_poolGetElement(&instance_ptr->programs, (Empathy_PoolHandle)machine_ptr->common.program);
 	assert(program_ptr);
 	assert(program_ptr->data);
 	assert(program_ptr->size);
-	assert(program_ptr->layout == machine_ptr->layout);
+	assert(program_ptr->layout == machine_ptr->common.layout);
 	assert(index < program_ptr->num_entry_points);
 
-	machine_ptr->instruction_pointer = program_ptr->entry_points[index].execution_offset;
-	machine_ptr->execution_stack.head = 0;
+	machine_ptr->execution.instruction_pointer = program_ptr->entry_points[index].execution_offset;
+	machine_ptr->execution.stack.head = 0;
 
-	machine_ptr->execution_state = IMPL_MACHINE_STATE_RUNNABLE;
+	machine_ptr->yield.stack_base = UINT32_MAX;
+	machine_ptr->yield.index = UINT32_MAX;
+
+	machine_ptr->state = IMPL_MACHINE_STATE_RUNNABLE;
 
 	return EMPATHY_SUCCESS;
 }
@@ -384,10 +386,10 @@ Empathy_Result impl_instanceBindParameterTable(Empathy_Instance this, Empathy_Ma
 	Impl_Instance *instance_ptr = (Impl_Instance *)this;
 	Impl_Machine *machine_ptr = (Impl_Machine *)empathy_poolGetElement(&instance_ptr->machines, (Empathy_PoolHandle)machine);
 	assert(machine_ptr);
-	assert(index < machine_ptr->max_bindings);
+	assert(index < machine_ptr->common.max_bindings);
 
-	machine_ptr->bindings[index].size = size;
-	machine_ptr->bindings[index].data = data;
+	machine_ptr->common.bindings[index].size = size;
+	machine_ptr->common.bindings[index].data = data;
 
 	return EMPATHY_SUCCESS;
 }
@@ -400,31 +402,28 @@ Empathy_Result impl_instanceRun(Empathy_Instance this, Empathy_Machine machine)
 	Impl_Instance *instance_ptr = (Impl_Instance *)this;
 	Impl_Machine *machine_ptr = (Impl_Machine *)empathy_poolGetElement(&instance_ptr->machines, (Empathy_PoolHandle)machine);
 	assert(machine_ptr);
-	assert(machine_ptr->execution_stack.data);
-	assert(machine_ptr->execution_stack.size > 0);
-	assert(machine_ptr->execution_stack.head <= machine_ptr->execution_stack.size);
-	assert(machine_ptr->predicate_stack.data);
-	assert(machine_ptr->predicate_stack.size > 0);
-	assert(machine_ptr->predicate_stack.head <= machine_ptr->predicate_stack.size);
+	assert(machine_ptr->execution.stack.data);
+	assert(machine_ptr->execution.stack.size > 0);
+	assert(machine_ptr->execution.stack.head <= machine_ptr->execution.stack.size);
 
-	switch (machine_ptr->execution_state)
+	switch (machine_ptr->state)
 	{
 		case IMPL_MACHINE_STATE_UNBOUND: return EMPATHY_PROGRAM_NOT_BOUND;
 		case IMPL_MACHINE_STATE_BOUND: return EMPATHY_PROGRAM_ENTRY_POINT_NOT_BOUND;
 		case IMPL_MACHINE_STATE_ENDED: return EMPATHY_EXECUTION_END;
-		case IMPL_MACHINE_STATE_FAULTED: return machine_ptr->fault_result;
+		case IMPL_MACHINE_STATE_FAULTED: return machine_ptr->error;
 	}
 
-	Impl_ProgramLayout *program_layout_ptr = (Impl_ProgramLayout *)empathy_poolGetElement(&instance_ptr->program_layouts, (Empathy_PoolHandle)machine_ptr->layout);
+	Impl_ProgramLayout *program_layout_ptr = (Impl_ProgramLayout *)empathy_poolGetElement(&instance_ptr->program_layouts, (Empathy_PoolHandle)machine_ptr->common.layout);
 	assert(program_layout_ptr);
 
-	Impl_Program *program_ptr = (Impl_Program *)empathy_poolGetElement(&instance_ptr->programs, (Empathy_PoolHandle)machine_ptr->program);
+	Impl_Program *program_ptr = (Impl_Program *)empathy_poolGetElement(&instance_ptr->programs, (Empathy_PoolHandle)machine_ptr->common.program);
 	assert(program_ptr);
 	assert(program_ptr->data);
 	assert(program_ptr->size);
-	assert(program_ptr->layout == machine_ptr->layout);
+	assert(program_ptr->layout == machine_ptr->common.layout);
 
-	if (machine_ptr->execution_state == IMPL_MACHINE_STATE_YIELDED)
+	if (machine_ptr->state == IMPL_MACHINE_STATE_YIELDED)
 	{
 		// TODO: validate yield stack frame
 	}
@@ -432,27 +431,26 @@ Empathy_Result impl_instanceRun(Empathy_Instance this, Empathy_Machine machine)
 	Impl_ExecutionContext context = {0};
 	context.program = program_ptr;
 	context.layout = program_layout_ptr;
-	context.stack = machine_ptr->execution_stack;
-	context.bindings = machine_ptr->bindings;
-	context.max_bindings = machine_ptr->max_bindings;
-	context.instruction_pointer = machine_ptr->instruction_pointer;
+	context.execution = machine_ptr->execution;
+	context.yield = machine_ptr->yield;
+	context.bindings = machine_ptr->common.bindings;
+	context.max_bindings = machine_ptr->common.max_bindings;
 	context.mode = IMPL_OPCODE_MODE_EXECUTION;
 
-	Empathy_Result result = impl_bytecodeExecute(&context, machine_ptr->instruction_limit);
+	Empathy_Result result = impl_bytecodeExecute(&context, machine_ptr->common.instruction_limit);
 
-	machine_ptr->instruction_pointer = context.instruction_pointer;
-	machine_ptr->execution_stack.head = context.stack.head;
+	machine_ptr->execution = context.execution;
 
 	assert(result != EMPATHY_SUCCESS);
 
 	switch (result)
 	{
-		case EMPATHY_EXECUTION_END: machine_ptr->execution_state = IMPL_MACHINE_STATE_ENDED; break;
-		case EMPATHY_EXECUTION_YIELD: machine_ptr->execution_state = IMPL_MACHINE_STATE_YIELDED; break;
+		case EMPATHY_EXECUTION_END: machine_ptr->state = IMPL_MACHINE_STATE_ENDED; break;
+		case EMPATHY_EXECUTION_YIELD: machine_ptr->state = IMPL_MACHINE_STATE_YIELDED; break;
 		default:
 		{
-			machine_ptr->execution_state = IMPL_MACHINE_STATE_FAULTED;
-			machine_ptr->fault_result = result;
+			machine_ptr->state = IMPL_MACHINE_STATE_FAULTED;
+			machine_ptr->error = result;
 		}
 		break;
 	}

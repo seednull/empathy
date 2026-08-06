@@ -193,7 +193,7 @@ Empathy_Result impl_bytecodeExecute(Impl_ExecutionContext *context, uint32_t ins
 	const Impl_ProgramLayout *layout = context->layout;
 	assert(layout);
 
-	Impl_MachineStack *stack = &context->stack;
+	Impl_MachineStack *stack = &context->execution.stack;
 	assert(stack);
 	assert(stack->data);
 	assert(stack->size > 0);
@@ -203,23 +203,23 @@ Empathy_Result impl_bytecodeExecute(Impl_ExecutionContext *context, uint32_t ins
 
 	for (uint32_t current_instruction = 0; current_instruction < instruction_limit; ++current_instruction)
 	{
-		if (context->instruction_pointer >= program->size)
+		if (context->execution.instruction_pointer >= program->size)
 			return EMPATHY_PROGRAM_OUT_OF_BOUNDS_READ;
 
-		uint8_t opcode = bytes[context->instruction_pointer];
+		uint8_t opcode = bytes[context->execution.instruction_pointer];
 
 		if (opcode < IMPL_OPCODE_ENUM_START || opcode > IMPL_OPCODE_ENUM_END)
 			return EMPATHY_INVALID_INSTRUCTION_OPCODE;
 
 		uint64_t instruction_size = impl_bytecodeGetInstructionSize(opcode);
-		if (context->instruction_pointer + instruction_size > program->size)
+		if (context->execution.instruction_pointer + instruction_size > program->size)
 			return EMPATHY_INVALID_INSTRUCTION_OPCODE;
 
 		Impl_OpcodeMode mode = impl_bytecodeGetInstructionMode(opcode);
 		if ((mode & context->mode) == 0)
 			return EMPATHY_INVALID_INSTRUCTION_OPCODE;
 
-		const uint8_t *instruction_data = bytes + context->instruction_pointer + 1;
+		const uint8_t *instruction_data = bytes + context->execution.instruction_pointer + 1;
 
 		switch (opcode)
 		{
@@ -923,7 +923,7 @@ Empathy_Result impl_bytecodeExecute(Impl_ExecutionContext *context, uint32_t ins
 				if (jump_target >= program->size)
 					return EMPATHY_INVALID_INSTRUCTION_DATA;
 
-				context->instruction_pointer = jump_target;
+				context->execution.instruction_pointer = jump_target;
 				instruction_size = 0;
 			}
 			break;
@@ -943,7 +943,7 @@ Empathy_Result impl_bytecodeExecute(Impl_ExecutionContext *context, uint32_t ins
 
 				if (value.data.u8 == 0)
 				{
-					context->instruction_pointer = jump_target;
+					context->execution.instruction_pointer = jump_target;
 					instruction_size = 0;
 				}
 
@@ -966,7 +966,7 @@ Empathy_Result impl_bytecodeExecute(Impl_ExecutionContext *context, uint32_t ins
 
 				if (value.data.u8 != 0)
 				{
-					context->instruction_pointer = jump_target;
+					context->execution.instruction_pointer = jump_target;
 					instruction_size = 0;
 				}
 
@@ -1012,13 +1012,13 @@ Empathy_Result impl_bytecodeExecute(Impl_ExecutionContext *context, uint32_t ins
 
 			case IMPL_OPCODE_END:
 			{
-				context->instruction_pointer += instruction_size;
+				context->execution.instruction_pointer += instruction_size;
 				return EMPATHY_EXECUTION_END;
 			}
 			break;
 		}
 
-		context->instruction_pointer += instruction_size;
+		context->execution.instruction_pointer += instruction_size;
 	}
 
 	return EMPATHY_INSTRUCTION_LIMIT_EXCEEDED;
