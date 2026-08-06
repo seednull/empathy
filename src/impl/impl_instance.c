@@ -411,6 +411,7 @@ Empathy_Result impl_instanceRun(Empathy_Instance this, Empathy_Machine machine)
 	{
 		case IMPL_MACHINE_STATE_UNBOUND: return EMPATHY_PROGRAM_NOT_BOUND;
 		case IMPL_MACHINE_STATE_BOUND: return EMPATHY_PROGRAM_ENTRY_POINT_NOT_BOUND;
+		case IMPL_MACHINE_STATE_ENDED: return EMPATHY_EXECUTION_END;
 		case IMPL_MACHINE_STATE_FAULTED: return machine_ptr->fault_result;
 	}
 
