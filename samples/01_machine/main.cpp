@@ -67,7 +67,7 @@ void testMachine(Empathy_Instance instance)
 		32,
 		32,
 		8,
-		UINT32_MAX,
+		1024,
 	};
 
 	Empathy_Machine machine = EMPATHY_NULL_HANDLE;
