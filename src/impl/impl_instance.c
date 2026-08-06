@@ -39,6 +39,7 @@ static void impl_destroyMachine(Impl_Instance *instance_ptr, Impl_Machine *machi
 
 	free(machine_ptr->common.bindings);
 	free(machine_ptr->execution.stack.data);
+	free(machine_ptr->yield.stack.data);
 	free(machine_ptr->predicate.stack.data);
 }
 
@@ -107,8 +108,8 @@ static Empathy_Result impl_instanceCreateProgramLayout(Empathy_Instance this, co
 
 		result.yield_resume_value_types = (Empathy_ValueType *)malloc(sizeof(Empathy_ValueType) * num_resume_values);
 
-		uint64_t current_argument = 0;
-		for (uint64_t i = 0; i < desc->num_yields; ++i)
+		uint32_t current_argument = 0;
+		for (uint32_t i = 0; i < desc->num_yields; ++i)
 		{
 			const Empathy_YieldDesc *src_yield = &desc->yields[i];
 			Impl_ProgramLayoutYield *dst_yield = &result.yields[i];
@@ -116,7 +117,7 @@ static Empathy_Result impl_instanceCreateProgramLayout(Empathy_Instance this, co
 			dst_yield->num_resume_values = src_yield->num_resume_values;
 			dst_yield->base_resume_value = current_argument;
 
-			for (uint64_t j = 0; j < src_yield->num_resume_values; ++j)
+			for (uint32_t j = 0; j < src_yield->num_resume_values; ++j)
 				result.yield_resume_value_types[current_argument++] = src_yield->resume_value_types[j];
 		}
 	}
@@ -172,6 +173,7 @@ static Empathy_Result impl_instanceCreateMachine(Empathy_Instance this, const Em
 	assert(this);
 	assert(desc);
 	assert(desc->execution_stack_size > 0);
+	assert(desc->yield_stack_size > 0);
 	assert(desc->predicate_stack_size > 0);
 	assert(desc->instruction_limit > 0);
 	assert(machine);
@@ -197,6 +199,9 @@ static Empathy_Result impl_instanceCreateMachine(Empathy_Instance this, const Em
 	result.execution.stack.size = desc->execution_stack_size;
 	result.execution.stack.data = (Empathy_Value *)malloc(sizeof(Empathy_Value) * desc->execution_stack_size);
 	
+	result.yield.stack.size = desc->yield_stack_size;
+	result.yield.stack.data = (Empathy_Value *)malloc(sizeof(Empathy_Value) * desc->yield_stack_size);
+
 	result.predicate.stack.size = desc->predicate_stack_size;
 	result.predicate.stack.data = (Empathy_Value *)malloc(sizeof(Empathy_Value) * desc->predicate_stack_size);
 	
@@ -334,8 +339,10 @@ Empathy_Result impl_instanceBindProgram(Empathy_Instance this, Empathy_Machine m
 	machine_ptr->execution.instruction_pointer = 0;
 	machine_ptr->execution.stack.head = 0;
 
-	machine_ptr->yield.stack_base = UINT32_MAX;
 	machine_ptr->yield.index = UINT32_MAX;
+	machine_ptr->yield.stack.head = 0;
+
+	machine_ptr->predicate.stack.head = 0;
 
 	machine_ptr->state = IMPL_MACHINE_STATE_BOUND;
 
@@ -353,6 +360,9 @@ Empathy_Result impl_instanceBindProgramEntryPoint(Empathy_Instance this, Empathy
 	assert(machine_ptr->execution.stack.data);
 	assert(machine_ptr->execution.stack.size > 0);
 	assert(machine_ptr->execution.stack.head <= machine_ptr->execution.stack.size);
+	assert(machine_ptr->yield.stack.data);
+	assert(machine_ptr->yield.stack.size > 0);
+	assert(machine_ptr->yield.stack.head <= machine_ptr->yield.stack.size);
 
 	if (machine_ptr->state == IMPL_MACHINE_STATE_UNBOUND)
 		return EMPATHY_PROGRAM_NOT_BOUND;
@@ -370,8 +380,8 @@ Empathy_Result impl_instanceBindProgramEntryPoint(Empathy_Instance this, Empathy
 	machine_ptr->execution.instruction_pointer = program_ptr->entry_points[index].execution_offset;
 	machine_ptr->execution.stack.head = 0;
 
-	machine_ptr->yield.stack_base = UINT32_MAX;
 	machine_ptr->yield.index = UINT32_MAX;
+	machine_ptr->yield.stack.head = 0;
 
 	machine_ptr->state = IMPL_MACHINE_STATE_RUNNABLE;
 
@@ -405,6 +415,9 @@ Empathy_Result impl_instanceRun(Empathy_Instance this, Empathy_Machine machine)
 	assert(machine_ptr->execution.stack.data);
 	assert(machine_ptr->execution.stack.size > 0);
 	assert(machine_ptr->execution.stack.head <= machine_ptr->execution.stack.size);
+	assert(machine_ptr->yield.stack.data);
+	assert(machine_ptr->yield.stack.size > 0);
+	assert(machine_ptr->yield.stack.head <= machine_ptr->yield.stack.size);
 
 	switch (machine_ptr->state)
 	{
@@ -425,7 +438,27 @@ Empathy_Result impl_instanceRun(Empathy_Instance this, Empathy_Machine machine)
 
 	if (machine_ptr->state == IMPL_MACHINE_STATE_YIELDED)
 	{
-		// TODO: validate yield stack frame
+		assert(machine_ptr->yield.index < program_layout_ptr->num_yields);
+
+		const Impl_ProgramLayoutYield *yield_desc = &program_layout_ptr->yields[machine_ptr->yield.index];
+		const Impl_MachineStack *yield_stack = &machine_ptr->yield.stack;
+
+		if (yield_stack->head < yield_desc->num_resume_values)
+			return EMPATHY_INVALID_RESUME_STATE;
+
+		for (uint32_t i = 0; i < yield_desc->num_resume_values; ++i)
+		{
+			uint32_t index = yield_desc->base_resume_value + i;
+			Empathy_ValueType expected_type = program_layout_ptr->yield_resume_value_types[index];
+
+			Empathy_Value value = yield_stack->data[yield_stack->head - yield_desc->num_resume_values + i];
+
+			if (expected_type.base_type != value.type.base_type)
+				return EMPATHY_INVALID_RESUME_STATE;
+
+			if (expected_type.atom_type != value.type.atom_type)
+				return EMPATHY_INVALID_RESUME_STATE;
+		}
 	}
 
 	Impl_ExecutionContext context = {0};
@@ -440,6 +473,7 @@ Empathy_Result impl_instanceRun(Empathy_Instance this, Empathy_Machine machine)
 	Empathy_Result result = impl_bytecodeExecute(&context, machine_ptr->common.instruction_limit);
 
 	machine_ptr->execution = context.execution;
+	machine_ptr->yield = context.yield;
 
 	assert(result != EMPATHY_SUCCESS);
 

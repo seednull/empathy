@@ -80,7 +80,26 @@ static EMPATHY_INLINE uint64_t impl_bytecodeGetInstructionSize(Impl_Opcode opcod
 		case IMPL_OPCODE_MATCH: return 1;
 
 		// yield
-		case IMPL_OPCODE_BEGIN_YIELD: return 1;
+		case IMPL_OPCODE_YIELD_PUSH_U8:
+		case IMPL_OPCODE_YIELD_PUSH_I8: return 2;
+
+		case IMPL_OPCODE_YIELD_PUSH_U16:
+		case IMPL_OPCODE_YIELD_PUSH_I16: return 3;
+
+		case IMPL_OPCODE_YIELD_PUSH_U32:
+		case IMPL_OPCODE_YIELD_PUSH_I32:
+		case IMPL_OPCODE_YIELD_PUSH_F32: return 5;
+
+		case IMPL_OPCODE_YIELD_PUSH_U64:
+		case IMPL_OPCODE_YIELD_PUSH_I64:
+		case IMPL_OPCODE_YIELD_PUSH_F64:
+		case IMPL_OPCODE_YIELD_PUSH_ATOM: return 9;
+
+		case IMPL_OPCODE_YIELD_DROP:
+		case IMPL_OPCODE_YIELD_DUP:
+		case IMPL_OPCODE_YIELD_PUT:
+		case IMPL_OPCODE_YIELD_TAKE: return 1;
+
 		case IMPL_OPCODE_YIELD: return 5;
 
 		// end
@@ -141,7 +160,21 @@ static EMPATHY_INLINE Impl_OpcodeMode impl_bytecodeGetInstructionMode(Impl_Opcod
 		case IMPL_OPCODE_MATCH: return IMPL_OPCODE_MODE_PREDICATE;
 
 		// yield
-		case IMPL_OPCODE_BEGIN_YIELD:
+		case IMPL_OPCODE_YIELD_PUSH_U8:
+		case IMPL_OPCODE_YIELD_PUSH_U16:
+		case IMPL_OPCODE_YIELD_PUSH_U32:
+		case IMPL_OPCODE_YIELD_PUSH_U64:
+		case IMPL_OPCODE_YIELD_PUSH_I8:
+		case IMPL_OPCODE_YIELD_PUSH_I16:
+		case IMPL_OPCODE_YIELD_PUSH_I32:
+		case IMPL_OPCODE_YIELD_PUSH_I64:
+		case IMPL_OPCODE_YIELD_PUSH_F32:
+		case IMPL_OPCODE_YIELD_PUSH_F64:
+		case IMPL_OPCODE_YIELD_PUSH_ATOM:
+		case IMPL_OPCODE_YIELD_DROP:
+		case IMPL_OPCODE_YIELD_DUP:
+		case IMPL_OPCODE_YIELD_PUT:
+		case IMPL_OPCODE_YIELD_TAKE:
 		case IMPL_OPCODE_YIELD: return IMPL_OPCODE_MODE_EXECUTION;
 
 		// end
@@ -198,6 +231,12 @@ Empathy_Result impl_bytecodeExecute(Impl_ExecutionContext *context, uint32_t ins
 	assert(stack->data);
 	assert(stack->size > 0);
 	assert(stack->head <= stack->size);
+
+	Impl_MachineStack *yield = &context->yield.stack;
+	assert(yield);
+	assert(yield->data);
+	assert(yield->size > 0);
+	assert(yield->head <= yield->size);
 
 	const uint8_t *bytes = (const uint8_t *)program->data;
 
@@ -998,15 +1037,228 @@ Empathy_Result impl_bytecodeExecute(Impl_ExecutionContext *context, uint32_t ins
 			}
 			break;
 
-			case IMPL_OPCODE_BEGIN_YIELD:
+			case IMPL_OPCODE_YIELD_PUSH_U8:
 			{
-				return EMPATHY_NOT_IMPLEMENTED;
+				if (yield->head >= yield->size)
+					return EMPATHY_STACK_OVERFLOW;
+
+				uint8_t data = *(const uint8_t *)instruction_data;
+
+				Empathy_Value value = {0};
+				value.type.base_type = EMPATHY_VALUE_BASE_TYPE_UINT8;
+				value.data.u8 = data;
+
+				yield->data[yield->head++] = value;
+			}
+			break;
+			
+			case IMPL_OPCODE_YIELD_PUSH_U16:
+			{
+				if (yield->head >= yield->size)
+					return EMPATHY_STACK_OVERFLOW;
+
+					uint16_t data = *(const uint16_t *)instruction_data;
+
+				Empathy_Value value = {0};
+				value.type.base_type = EMPATHY_VALUE_BASE_TYPE_UINT16;
+				value.data.u16 = data;
+
+				yield->data[yield->head++] = value;
+			}
+			break;
+
+			case IMPL_OPCODE_YIELD_PUSH_U32:
+			{
+				if (yield->head >= yield->size)
+					return EMPATHY_STACK_OVERFLOW;
+
+				uint32_t data = *(const uint32_t *)instruction_data;
+
+				Empathy_Value value = {0};
+				value.type.base_type = EMPATHY_VALUE_BASE_TYPE_UINT32;
+				value.data.u32 = data;
+
+
+				yield->data[yield->head++] = value;
+
+			}
+			break;
+
+			case IMPL_OPCODE_YIELD_PUSH_U64:
+			{
+				if (yield->head >= yield->size)
+					return EMPATHY_STACK_OVERFLOW;
+
+				uint64_t data = *(const uint64_t *)instruction_data;
+
+				Empathy_Value value = {0};
+				value.type.base_type = EMPATHY_VALUE_BASE_TYPE_UINT64;
+				value.data.u64 = data;
+
+				yield->data[yield->head++] = value;
+			}
+			break;
+
+			case IMPL_OPCODE_YIELD_PUSH_I8:
+			{
+				if (yield->head >= yield->size)
+					return EMPATHY_STACK_OVERFLOW;
+
+				int8_t data = *(const int8_t *)instruction_data;
+
+				Empathy_Value value = {0};
+				value.type.base_type = EMPATHY_VALUE_BASE_TYPE_INT8;
+				value.data.i8 = data;
+
+				yield->data[yield->head++] = value;
+			}
+			break;
+
+			case IMPL_OPCODE_YIELD_PUSH_I16:
+			{
+				if (yield->head >= yield->size)
+					return EMPATHY_STACK_OVERFLOW;
+
+				int16_t data = *(const int16_t *)instruction_data;
+
+				Empathy_Value value = {0};
+				value.type.base_type = EMPATHY_VALUE_BASE_TYPE_INT16;
+				value.data.i16 = data;
+
+				yield->data[yield->head++] = value;
+			}
+			break;
+
+			case IMPL_OPCODE_YIELD_PUSH_I32:
+			{
+				if (yield->head >= yield->size)
+					return EMPATHY_STACK_OVERFLOW;
+
+				int32_t data = *(const int32_t *)instruction_data;
+
+				Empathy_Value value = {0};
+				value.type.base_type = EMPATHY_VALUE_BASE_TYPE_INT32;
+				value.data.i32 = data;
+
+				yield->data[yield->head++] = value;
+			}
+			break;
+
+			case IMPL_OPCODE_YIELD_PUSH_I64:
+			{
+				if (yield->head >= yield->size)
+					return EMPATHY_STACK_OVERFLOW;
+
+				int64_t data = *(const int64_t *)instruction_data;
+
+				Empathy_Value value = {0};
+				value.type.base_type = EMPATHY_VALUE_BASE_TYPE_INT64;
+				value.data.i64 = data;
+
+				yield->data[yield->head++] = value;
+			}
+			break;
+
+			case IMPL_OPCODE_YIELD_PUSH_F32:
+			{
+				if (yield->head >= yield->size)
+					return EMPATHY_STACK_OVERFLOW;
+
+				float data = *(const float *)instruction_data;
+
+				Empathy_Value value = {0};
+				value.type.base_type = EMPATHY_VALUE_BASE_TYPE_FLOAT32;
+				value.data.f32 = data;
+
+				yield->data[yield->head++] = value;
+			}
+			break;
+
+			case IMPL_OPCODE_YIELD_PUSH_F64:
+			{
+				if (yield->head >= yield->size)
+					return EMPATHY_STACK_OVERFLOW;
+
+				double data = *(const double *)instruction_data;
+
+				Empathy_Value value = {0};
+				value.type.base_type = EMPATHY_VALUE_BASE_TYPE_FLOAT64;
+				value.data.f64 = data;
+
+				yield->data[yield->head++] = value;
+			}
+			break;
+
+			case IMPL_OPCODE_YIELD_PUSH_ATOM:
+			{
+				if (yield->head >= yield->size)
+					return EMPATHY_STACK_OVERFLOW;
+
+				Empathy_Atom data = *(const Empathy_Atom *)instruction_data;
+
+				Empathy_Value value = {0};
+				value.type = (Empathy_ValueType){EMPATHY_VALUE_BASE_TYPE_ATOM, data.type};
+				value.data.atom = data;
+
+				yield->data[yield->head++] = value;
+			}
+			break;
+
+			case IMPL_OPCODE_YIELD_DROP:
+			{
+				if (yield->head == 0)
+					return EMPATHY_STACK_UNDERFLOW;
+
+				yield->head--;
+			}
+			break;
+
+			case IMPL_OPCODE_YIELD_DUP:
+			{
+				if (yield->head >= yield->size)
+					return EMPATHY_STACK_OVERFLOW;
+
+				if (yield->head == 0)
+					return EMPATHY_STACK_UNDERFLOW;
+
+				Empathy_Value value = yield->data[yield->head - 1];
+				yield->data[yield->head++] = value;
+			}
+			break;
+
+			case IMPL_OPCODE_YIELD_PUT:
+			{
+				if (yield->head >= yield->size)
+					return EMPATHY_STACK_OVERFLOW;
+
+				if (stack->head == 0)
+					return EMPATHY_STACK_UNDERFLOW;
+
+				Empathy_Value value = stack->data[--stack->head];
+				yield->data[yield->head++] = value;
+			}
+			break;
+
+			case IMPL_OPCODE_YIELD_TAKE:
+			{
+				if (stack->head >= stack->size)
+					return EMPATHY_STACK_OVERFLOW;
+
+				if (yield->head == 0)
+					return EMPATHY_STACK_UNDERFLOW;
+
+				Empathy_Value value = yield->data[--yield->head];
+				stack->data[stack->head++] = value;
 			}
 			break;
 
 			case IMPL_OPCODE_YIELD:
 			{
-				return EMPATHY_NOT_IMPLEMENTED;
+				uint32_t data = *(const uint32_t *)instruction_data;
+
+				context->yield.index = data;
+				context->execution.instruction_pointer += instruction_size;
+				return EMPATHY_EXECUTION_YIELD;
 			}
 			break;
 

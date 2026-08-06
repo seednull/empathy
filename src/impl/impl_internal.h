@@ -75,7 +75,21 @@ typedef enum Impl_Opcode_t
 	IMPL_OPCODE_MATCH,
 
 	// yield
-	IMPL_OPCODE_BEGIN_YIELD,
+	IMPL_OPCODE_YIELD_PUSH_U8,
+	IMPL_OPCODE_YIELD_PUSH_U16,
+	IMPL_OPCODE_YIELD_PUSH_U32,
+	IMPL_OPCODE_YIELD_PUSH_U64,
+	IMPL_OPCODE_YIELD_PUSH_I8,
+	IMPL_OPCODE_YIELD_PUSH_I16,
+	IMPL_OPCODE_YIELD_PUSH_I32,
+	IMPL_OPCODE_YIELD_PUSH_I64,
+	IMPL_OPCODE_YIELD_PUSH_F32,
+	IMPL_OPCODE_YIELD_PUSH_F64,
+	IMPL_OPCODE_YIELD_PUSH_ATOM,
+	IMPL_OPCODE_YIELD_DROP,
+	IMPL_OPCODE_YIELD_DUP,
+	IMPL_OPCODE_YIELD_PUT,
+	IMPL_OPCODE_YIELD_TAKE,
 	IMPL_OPCODE_YIELD,
 
 	// end
@@ -116,7 +130,7 @@ typedef struct Impl_ProgramLayoutParameter_t
 typedef struct Impl_ProgramLayoutYield_t
 {
 	uint32_t num_resume_values;
-	uint64_t base_resume_value;
+	uint32_t base_resume_value;
 } Impl_ProgramLayoutYield;
 
 typedef struct Impl_ProgramLayout_t
@@ -173,7 +187,7 @@ typedef struct Impl_MachineCommonState_t
 
 typedef struct Impl_MachineYieldState_t
 {
-	uint32_t stack_base;
+	Impl_MachineStack stack;
 	uint32_t index;
 } Impl_MachineYieldState;
 

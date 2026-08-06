@@ -56,6 +56,7 @@ typedef enum Empathy_Result_t
 	EMPATHY_INVALID_INSTRUCTION_OPCODE,
 	EMPATHY_INVALID_INSTRUCTION_DATA,
 	EMPATHY_INVALID_OPERAND_TYPE,
+	EMPATHY_INVALID_RESUME_STATE,
 	EMPATHY_PROGRAM_NOT_BOUND,
 	EMPATHY_PROGRAM_ENTRY_POINT_NOT_BOUND,
 	EMPATHY_PARAMETER_NOT_READABLE,
@@ -199,6 +200,7 @@ typedef struct Empathy_ProgramDesc_t
 typedef struct Empathy_MachineDesc_t
 {
 	uint32_t execution_stack_size;
+	uint32_t yield_stack_size;
 	uint32_t predicate_stack_size;
 	uint32_t max_parameter_tables;
 	uint32_t instruction_limit;
