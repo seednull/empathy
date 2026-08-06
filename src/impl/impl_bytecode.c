@@ -203,6 +203,9 @@ Empathy_Result impl_bytecodeExecute(Impl_ExecutionContext *context, uint32_t ins
 
 	for (uint32_t current_instruction = 0; current_instruction < instruction_limit; ++current_instruction)
 	{
+		if (context->instruction_pointer >= program->size)
+			return EMPATHY_PROGRAM_OUT_OF_BOUNDS_READ;
+
 		uint8_t opcode = bytes[context->instruction_pointer];
 
 		if (opcode < IMPL_OPCODE_ENUM_START || opcode > IMPL_OPCODE_ENUM_END)
