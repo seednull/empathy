@@ -156,6 +156,7 @@ static Empathy_Result impl_instanceCreateMachine(Empathy_Instance this, const Em
 	assert(desc);
 	assert(desc->execution_stack_size > 0);
 	assert(desc->predicate_stack_size > 0);
+	assert(desc->instruction_limit > 0);
 	assert(machine);
 
 	Impl_Instance *instance_ptr = (Impl_Instance *)this;
