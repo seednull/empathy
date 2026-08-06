@@ -1256,6 +1256,9 @@ Empathy_Result impl_bytecodeExecute(Impl_ExecutionContext *context, uint32_t ins
 			{
 				uint32_t data = *(const uint32_t *)instruction_data;
 
+				if (data >= layout->num_yields)
+					return EMPATHY_INVALID_INSTRUCTION_DATA;
+
 				context->yield.index = data;
 				context->execution.instruction_pointer += instruction_size;
 				return EMPATHY_EXECUTION_YIELD;

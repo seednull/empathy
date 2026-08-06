@@ -459,6 +459,9 @@ Empathy_Result impl_instanceRun(Empathy_Instance this, Empathy_Machine machine)
 			if (expected_type.atom_type != value.type.atom_type)
 				return EMPATHY_INVALID_RESUME_STATE;
 		}
+
+		machine_ptr->yield.index = UINT32_MAX;
+		machine_ptr->state = IMPL_MACHINE_STATE_RUNNABLE;
 	}
 
 	Impl_ExecutionContext context = {0};
