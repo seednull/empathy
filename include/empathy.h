@@ -47,7 +47,6 @@ EMPATHY_DEFINE_HANDLE(Empathy_Machine);
 typedef enum Empathy_Result_t
 {
 	EMPATHY_SUCCESS = 0,
-	EMPATHY_EXECUTION_BUDGET_EXCEEDED,
 	EMPATHY_EXECUTION_YIELD,
 	EMPATHY_EXECUTION_END,
 	EMPATHY_NOT_IMPLEMENTED,
@@ -64,6 +63,7 @@ typedef enum Empathy_Result_t
 	EMPATHY_ATOM_TYPE_MISMATCH,
 	EMPATHY_STACK_OVERFLOW,
 	EMPATHY_STACK_UNDERFLOW,
+	EMPATHY_INSTRUCTION_LIMIT_EXCEEDED,
 
 	// FIXME: add more error codes for internal errors
 	EMPATHY_INTERNAL_ERROR,
@@ -187,6 +187,7 @@ typedef struct Empathy_MachineDesc_t
 	uint64_t execution_stack_size;
 	uint64_t predicate_stack_size;
 	uint64_t max_parameter_tables;
+	uint32_t instruction_limit;
 } Empathy_MachineDesc;
 
 // Function pointers
@@ -201,7 +202,7 @@ typedef Empathy_Result (*PFN_empathyDestroyInstance)(Empathy_Instance instance);
 
 typedef Empathy_Result (*PFN_empathyBindProgram)(Empathy_Instance instance, Empathy_Machine machine, Empathy_Program program);
 typedef Empathy_Result (*PFN_empathyBindParameterTable)(Empathy_Instance instance, Empathy_Machine machine, uint32_t index, uint64_t size, void *data);
-typedef Empathy_Result (*PFN_empathyRun)(Empathy_Instance instance, Empathy_Machine machine, uint32_t budget);
+typedef Empathy_Result (*PFN_empathyRun)(Empathy_Instance instance, Empathy_Machine machine);
 
 
 typedef struct Empathy_InstanceTable_t
@@ -236,7 +237,7 @@ EMPATHY_APIENTRY Empathy_Result empathyDestroyInstance(Empathy_Instance instance
 
 EMPATHY_APIENTRY Empathy_Result empathyBindProgram(Empathy_Instance instance, Empathy_Machine machine, Empathy_Program program);
 EMPATHY_APIENTRY Empathy_Result empathyBindParameterTable(Empathy_Instance instance, Empathy_Machine machine, uint32_t index, uint64_t size, void *data);
-EMPATHY_APIENTRY Empathy_Result empathyRun(Empathy_Instance instance, Empathy_Machine machine, uint32_t budget);
+EMPATHY_APIENTRY Empathy_Result empathyRun(Empathy_Instance instance, Empathy_Machine machine);
 #endif
 
 #ifdef __cplusplus

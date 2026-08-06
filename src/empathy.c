@@ -143,7 +143,7 @@ Empathy_Result empathyBindParameterTable(Empathy_Instance instance, Empathy_Mach
 	return ptr->vtbl->bindParameterTable(instance, machine, index, size, data);
 }
 
-Empathy_Result empathyRun(Empathy_Instance instance, Empathy_Machine machine, uint32_t budget)
+Empathy_Result empathyRun(Empathy_Instance instance, Empathy_Machine machine)
 {
 	if (instance == EMPATHY_NULL_HANDLE)
 		return EMPATHY_INVALID_INSTANCE;
@@ -152,5 +152,5 @@ Empathy_Result empathyRun(Empathy_Instance instance, Empathy_Machine machine, ui
 	assert(ptr->vtbl);
 	assert(ptr->vtbl->run);
 
-	return ptr->vtbl->run(instance, machine, budget);
+	return ptr->vtbl->run(instance, machine);
 }

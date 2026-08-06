@@ -66,7 +66,8 @@ void testMachine(Empathy_Instance instance)
 	{
 		32,
 		32,
-		8
+		8,
+		UINT32_MAX,
 	};
 
 	Empathy_Machine machine = EMPATHY_NULL_HANDLE;
@@ -84,7 +85,7 @@ void testMachine(Empathy_Instance instance)
 
 	assert(local_state.time == 0.0f);
 
-	result = empathyRun(instance, machine, 3);
+	result = empathyRun(instance, machine);
 	assert(result == EMPATHY_EXECUTION_END);
 
 	assert(local_state.time == world_state.time);

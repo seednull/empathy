@@ -181,7 +181,7 @@ Empathy_Result impl_bytecodeValidate(uint64_t size, const void *data, const Impl
 	return EMPATHY_SUCCESS;
 }
 
-Empathy_Result impl_bytecodeExecute(Impl_ExecutionContext *context, uint32_t budget)
+Empathy_Result impl_bytecodeExecute(Impl_ExecutionContext *context, uint32_t instruction_limit)
 {
 	assert(context);
 
@@ -201,7 +201,7 @@ Empathy_Result impl_bytecodeExecute(Impl_ExecutionContext *context, uint32_t bud
 
 	const uint8_t *bytes = (const uint8_t *)program->data;
 
-	for (uint32_t current_budget = 0; current_budget < budget; ++current_budget)
+	for (uint32_t current_instruction = 0; current_instruction < instruction_limit; ++current_instruction)
 	{
 		uint8_t opcode = bytes[context->instruction_pointer];
 
@@ -1018,5 +1018,5 @@ Empathy_Result impl_bytecodeExecute(Impl_ExecutionContext *context, uint32_t bud
 		context->instruction_pointer += instruction_size;
 	}
 
-	return EMPATHY_EXECUTION_BUDGET_EXCEEDED;
+	return EMPATHY_INSTRUCTION_LIMIT_EXCEEDED;
 }

@@ -174,6 +174,7 @@ static Empathy_Result impl_instanceCreateMachine(Empathy_Instance this, const Em
 			result.bindings[i].size = 0;
 		}
 	}
+	result.instruction_limit = desc->instruction_limit;
 
 	result.execution_stack.size = desc->execution_stack_size;
 	result.execution_stack.data = (Empathy_Value *)malloc(sizeof(Empathy_Value) * desc->execution_stack_size);
@@ -329,7 +330,7 @@ Empathy_Result impl_instanceBindParameterTable(Empathy_Instance this, Empathy_Ma
 	return EMPATHY_SUCCESS;
 }
 
-Empathy_Result impl_instanceRun(Empathy_Instance this, Empathy_Machine machine, uint32_t budget)
+Empathy_Result impl_instanceRun(Empathy_Instance this, Empathy_Machine machine)
 {
 	assert(this);
 	assert(machine);
@@ -362,7 +363,7 @@ Empathy_Result impl_instanceRun(Empathy_Instance this, Empathy_Machine machine, 
 	context.instruction_pointer = machine_ptr->instruction_pointer;
 	context.mode = IMPL_OPCODE_MODE_EXECUTION;
 
-	Empathy_Result result = impl_bytecodeExecute(&context, budget);
+	Empathy_Result result = impl_bytecodeExecute(&context, machine_ptr->instruction_limit);
 
 	machine_ptr->instruction_pointer = context.instruction_pointer;
 	machine_ptr->execution_stack.head = context.stack.head;
