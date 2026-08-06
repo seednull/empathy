@@ -171,7 +171,8 @@ typedef struct Impl_Machine_t
 	uint32_t max_bindings;
 	uint32_t instruction_limit;
 	uint64_t instruction_pointer;
-	Impl_MachineState state;
+	Impl_MachineState execution_state;
+	Empathy_Result execution_result;
 } Impl_Machine;
 
 typedef struct Impl_ExecutionContext_t
