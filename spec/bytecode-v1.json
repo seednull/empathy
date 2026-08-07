@@ -1,0 +1,87 @@
+{
+  "version": {
+    "major": 1,
+    "minor": 0
+  },
+  "endianness": "little",
+  "instructionAlignment": 1,
+  "operandSizes": {
+    "u8": 1,
+    "u16": 2,
+    "u32": 4,
+    "u64": 8,
+    "i8": 1,
+    "i16": 2,
+    "i32": 4,
+    "i64": 8,
+    "f32": 4,
+    "f64": 8,
+    "atom": 8,
+    "parameter_index": 4,
+    "yield_index": 4,
+    "program_offset": 8
+  },
+  "modeBits": {
+    "execution": 1,
+    "predicate": 2
+  },
+  "instructions": [
+    { "name": "push_u8",          "opcode": 0,  "operands": ["u8"],                "modes": ["execution", "predicate"] },
+    { "name": "push_u16",         "opcode": 1,  "operands": ["u16"],               "modes": ["execution", "predicate"] },
+    { "name": "push_u32",         "opcode": 2,  "operands": ["u32"],               "modes": ["execution", "predicate"] },
+    { "name": "push_u64",         "opcode": 3,  "operands": ["u64"],               "modes": ["execution", "predicate"] },
+    { "name": "push_i8",          "opcode": 4,  "operands": ["i8"],                "modes": ["execution", "predicate"] },
+    { "name": "push_i16",         "opcode": 5,  "operands": ["i16"],               "modes": ["execution", "predicate"] },
+    { "name": "push_i32",         "opcode": 6,  "operands": ["i32"],               "modes": ["execution", "predicate"] },
+    { "name": "push_i64",         "opcode": 7,  "operands": ["i64"],               "modes": ["execution", "predicate"] },
+    { "name": "push_f32",         "opcode": 8,  "operands": ["f32"],               "modes": ["execution", "predicate"] },
+    { "name": "push_f64",         "opcode": 9,  "operands": ["f64"],               "modes": ["execution", "predicate"] },
+    { "name": "push_atom",        "opcode": 10, "operands": ["atom"],              "modes": ["execution", "predicate"] },
+
+    { "name": "load",             "opcode": 11, "operands": ["parameter_index"],   "modes": ["execution", "predicate"] },
+    { "name": "store",            "opcode": 12, "operands": ["parameter_index"],   "modes": ["execution"] },
+
+    { "name": "drop",             "opcode": 13, "operands": [],                    "modes": ["execution", "predicate"] },
+    { "name": "dup",              "opcode": 14, "operands": [],                    "modes": ["execution", "predicate"] },
+
+    { "name": "add",              "opcode": 15, "operands": [],                    "modes": ["execution", "predicate"] },
+    { "name": "sub",              "opcode": 16, "operands": [],                    "modes": ["execution", "predicate"] },
+    { "name": "mul",              "opcode": 17, "operands": [],                    "modes": ["execution", "predicate"] },
+    { "name": "div",              "opcode": 18, "operands": [],                    "modes": ["execution", "predicate"] },
+
+    { "name": "equal",            "opcode": 19, "operands": [],                    "modes": ["execution", "predicate"] },
+    { "name": "not_equal",        "opcode": 20, "operands": [],                    "modes": ["execution", "predicate"] },
+    { "name": "less",             "opcode": 21, "operands": [],                    "modes": ["execution", "predicate"] },
+    { "name": "less_equal",       "opcode": 22, "operands": [],                    "modes": ["execution", "predicate"] },
+    { "name": "greater",          "opcode": 23, "operands": [],                    "modes": ["execution", "predicate"] },
+    { "name": "greater_equal",    "opcode": 24, "operands": [],                    "modes": ["execution", "predicate"] },
+
+    { "name": "jump",             "opcode": 25, "operands": ["program_offset"],    "modes": ["execution", "predicate"] },
+    { "name": "jump_false",       "opcode": 26, "operands": ["program_offset"],    "modes": ["execution", "predicate"] },
+    { "name": "jump_true",        "opcode": 27, "operands": ["program_offset"],    "modes": ["execution", "predicate"] },
+
+    { "name": "reject",           "opcode": 28, "operands": [],                    "modes": ["predicate"] },
+    { "name": "reject_false",     "opcode": 29, "operands": [],                    "modes": ["predicate"] },
+    { "name": "reject_true",      "opcode": 30, "operands": [],                    "modes": ["predicate"] },
+    { "name": "match",            "opcode": 31, "operands": [],                    "modes": ["predicate"] },
+
+    { "name": "yield_push_u8",    "opcode": 32, "operands": ["u8"],                "modes": ["execution"] },
+    { "name": "yield_push_u16",   "opcode": 33, "operands": ["u16"],               "modes": ["execution"] },
+    { "name": "yield_push_u32",   "opcode": 34, "operands": ["u32"],               "modes": ["execution"] },
+    { "name": "yield_push_u64",   "opcode": 35, "operands": ["u64"],               "modes": ["execution"] },
+    { "name": "yield_push_i8",    "opcode": 36, "operands": ["i8"],                "modes": ["execution"] },
+    { "name": "yield_push_i16",   "opcode": 37, "operands": ["i16"],               "modes": ["execution"] },
+    { "name": "yield_push_i32",   "opcode": 38, "operands": ["i32"],               "modes": ["execution"] },
+    { "name": "yield_push_i64",   "opcode": 39, "operands": ["i64"],               "modes": ["execution"] },
+    { "name": "yield_push_f32",   "opcode": 40, "operands": ["f32"],               "modes": ["execution"] },
+    { "name": "yield_push_f64",   "opcode": 41, "operands": ["f64"],               "modes": ["execution"] },
+    { "name": "yield_push_atom",  "opcode": 42, "operands": ["atom"],              "modes": ["execution"] },
+    { "name": "yield_drop",       "opcode": 43, "operands": [],                    "modes": ["execution"] },
+    { "name": "yield_dup",        "opcode": 44, "operands": [],                    "modes": ["execution"] },
+    { "name": "yield_put",        "opcode": 45, "operands": [],                    "modes": ["execution"] },
+    { "name": "yield_take",       "opcode": 46, "operands": [],                    "modes": ["execution"] },
+    { "name": "yield",            "opcode": 47, "operands": ["yield_index"],       "modes": ["execution"] },
+
+    { "name": "end",              "opcode": 48, "operands": [],                    "modes": ["execution"] }
+  ]
+}

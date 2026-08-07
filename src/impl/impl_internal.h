@@ -26,82 +26,6 @@ typedef enum Impl_OpcodeMode_t
 	IMPL_OPCODE_MODE_ENUM_FORCE32 = 0x7FFFFFFF,
 } Impl_OpcodeMode;
 
-typedef enum Impl_Opcode_t
-{
-	// constant
-	IMPL_OPCODE_PUSH_U8 = 0,
-	IMPL_OPCODE_PUSH_U16,
-	IMPL_OPCODE_PUSH_U32,
-	IMPL_OPCODE_PUSH_U64,
-	IMPL_OPCODE_PUSH_I8,
-	IMPL_OPCODE_PUSH_I16,
-	IMPL_OPCODE_PUSH_I32,
-	IMPL_OPCODE_PUSH_I64,
-	IMPL_OPCODE_PUSH_F32,
-	IMPL_OPCODE_PUSH_F64,
-	IMPL_OPCODE_PUSH_ATOM,
-
-	// parameter
-	IMPL_OPCODE_LOAD,
-	IMPL_OPCODE_STORE,
-
-	// stack
-	IMPL_OPCODE_DROP,
-	IMPL_OPCODE_DUP,
-
-	// arithmetic
-	IMPL_OPCODE_ADD,
-	IMPL_OPCODE_SUB,
-	IMPL_OPCODE_MUL,
-	IMPL_OPCODE_DIV,
-
-	// logic
-	IMPL_OPCODE_EQUAL,
-	IMPL_OPCODE_NOT_EQUAL,
-	IMPL_OPCODE_LESS,
-	IMPL_OPCODE_LESS_EQUAL,
-	IMPL_OPCODE_GREATER,
-	IMPL_OPCODE_GREATER_EQUAL,
-
-	// control
-	IMPL_OPCODE_JUMP,
-	IMPL_OPCODE_JUMP_FALSE,
-	IMPL_OPCODE_JUMP_TRUE,
-
-	// predicate
-	IMPL_OPCODE_REJECT,
-	IMPL_OPCODE_REJECT_FALSE,
-	IMPL_OPCODE_REJECT_TRUE,
-	IMPL_OPCODE_MATCH,
-
-	// yield
-	IMPL_OPCODE_YIELD_PUSH_U8,
-	IMPL_OPCODE_YIELD_PUSH_U16,
-	IMPL_OPCODE_YIELD_PUSH_U32,
-	IMPL_OPCODE_YIELD_PUSH_U64,
-	IMPL_OPCODE_YIELD_PUSH_I8,
-	IMPL_OPCODE_YIELD_PUSH_I16,
-	IMPL_OPCODE_YIELD_PUSH_I32,
-	IMPL_OPCODE_YIELD_PUSH_I64,
-	IMPL_OPCODE_YIELD_PUSH_F32,
-	IMPL_OPCODE_YIELD_PUSH_F64,
-	IMPL_OPCODE_YIELD_PUSH_ATOM,
-	IMPL_OPCODE_YIELD_DROP,
-	IMPL_OPCODE_YIELD_DUP,
-	IMPL_OPCODE_YIELD_PUT,
-	IMPL_OPCODE_YIELD_TAKE,
-	IMPL_OPCODE_YIELD,
-
-	// end
-	IMPL_OPCODE_END,
-
-	IMPL_OPCODE_ENUM_START = IMPL_OPCODE_PUSH_U8,
-	IMPL_OPCODE_ENUM_END = IMPL_OPCODE_END,
-
-	IMPL_OPCODE_ENUM_MAX,
-	IMPL_OPCODE_ENUM_FORCE32 = 0x7FFFFFFF,
-} Impl_Opcode;
-
 typedef struct Impl_Instance_t
 {
 	Empathy_InstanceTable *vtbl;
@@ -226,5 +150,5 @@ typedef struct Impl_ExecutionContext_t
 	Impl_OpcodeMode mode;
 } Impl_ExecutionContext;
 
-Empathy_Result impl_bytecodeValidate(uint64_t size, const void *data, const Impl_ProgramLayout *layout);
+Empathy_Result impl_bytecodeValidate(const Empathy_ProgramDesc *program_desc, const Impl_ProgramLayout *layout);
 Empathy_Result impl_bytecodeExecute(Impl_ExecutionContext *context, uint32_t instruction_limit);

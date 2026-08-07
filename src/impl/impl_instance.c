@@ -130,8 +130,8 @@ static Empathy_Result impl_instanceCreateProgram(Empathy_Instance this, const Em
 {
 	assert(this);
 	assert(desc);
-	assert(desc->data);
-	assert(desc->size > 0);
+	assert(desc->bytecode_data);
+	assert(desc->bytecode_size > 0);
 	assert(desc->entry_points);
 	assert(desc->num_entry_points > 0);
 	assert(program);
@@ -140,24 +140,21 @@ static Empathy_Result impl_instanceCreateProgram(Empathy_Instance this, const Em
 	Impl_ProgramLayout *program_layout_ptr = (Impl_ProgramLayout *)empathy_poolGetElement(&instance_ptr->program_layouts, (Empathy_PoolHandle)desc->layout);
 	assert(program_layout_ptr);
 
-	Empathy_Result empathy_result = impl_bytecodeValidate(desc->size, desc->data, program_layout_ptr);
+	Empathy_Result empathy_result = impl_bytecodeValidate(desc, program_layout_ptr);
 	if (empathy_result != EMPATHY_SUCCESS)
 		return empathy_result;
 
 	Impl_Program result = {0};
 	result.layout = desc->layout;
-	result.size = desc->size;
-	result.data = malloc(desc->size);
+	result.size = desc->bytecode_size;
+	result.data = malloc(desc->bytecode_size);
 	result.num_entry_points = desc->num_entry_points;
 	result.entry_points = malloc(sizeof(Impl_EntryPoint) * desc->num_entry_points);
 
-	memcpy(result.data, desc->data, desc->size);
+	memcpy(result.data, desc->bytecode_data, desc->bytecode_size);
 	for (uint32_t i = 0; i < desc->num_entry_points; ++i)
 	{
-		const Empathy_ProgramEntryPointDesc *src_entry = &desc->entry_points[i];
-		assert(src_entry->execution_offset < desc->size);
-		assert(src_entry->predicate_offset == EMPATHY_PROGRAM_OFFSET_NONE || src_entry->predicate_offset < desc->size);
-
+		const Empathy_EntryPointDesc *src_entry = &desc->entry_points[i];
 		Impl_EntryPoint *dst_entry = &result.entry_points[i];
 
 		dst_entry->execution_offset = src_entry->execution_offset;
