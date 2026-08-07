@@ -508,7 +508,7 @@ Empathy_Result impl_instanceGetYieldStackSize(Empathy_Instance this, Empathy_Mac
 	if (machine_ptr->state != IMPL_MACHINE_STATE_YIELDED)
 		return EMPATHY_MACHINE_NOT_YIELDED;
 
-	*size = machine_ptr->yield.stack.size;
+	*size = machine_ptr->yield.stack.head;
 	return EMPATHY_SUCCESS;
 }
 
@@ -589,10 +589,7 @@ Empathy_Result impl_instanceYieldStackPeek(Empathy_Instance this, Empathy_Machin
 
 	Impl_MachineStack *stack = &machine_ptr->yield.stack;
 
-	if (stack->head == 0)
-		return EMPATHY_STACK_UNDERFLOW;
-
-	if (depth >= stack->size)
+	if (depth >= stack->head)
 		return EMPATHY_STACK_UNDERFLOW;
 
 	*value = stack->data[stack->head - 1 - depth];
@@ -616,6 +613,12 @@ static Empathy_InstanceTable instance_vtbl =
 	impl_instanceBindProgramEntryPoint,
 	impl_instanceBindParameterTable,
 	impl_instanceRun,
+
+	impl_instanceGetYieldStackSize,
+	impl_instanceGetYieldIndex,
+	impl_instanceYieldStackPush,
+	impl_instanceYieldStackPop,
+	impl_instanceYieldStackPeek,
 };
 
 /*
