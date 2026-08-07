@@ -1027,6 +1027,8 @@ Empathy_Result impl_bytecodeExecute(Impl_ExecutionContext *context, uint32_t ins
 				if (value.type.base_type != EMPATHY_VALUE_BASE_TYPE_UINT8)
 					return EMPATHY_INVALID_OPERAND_TYPE;
 
+				stack->head -= 1;
+
 				if (value.data.u8 == 0)
 				{
 					context->execution.instruction_pointer += instruction_size;
@@ -1043,6 +1045,8 @@ Empathy_Result impl_bytecodeExecute(Impl_ExecutionContext *context, uint32_t ins
 				Empathy_Value value = stack->data[stack->head - 1];
 				if (value.type.base_type != EMPATHY_VALUE_BASE_TYPE_UINT8)
 					return EMPATHY_INVALID_OPERAND_TYPE;
+
+				stack->head -= 1;
 
 				if (value.data.u8 != 0)
 				{
