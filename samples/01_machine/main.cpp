@@ -71,6 +71,7 @@ void testMachine(Empathy_Instance instance)
 	{
 		32,
 		32,
+		32,
 		8,
 		1024,
 	};
