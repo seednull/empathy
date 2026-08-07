@@ -54,7 +54,7 @@ void testDestroyContext(Test_Context *context)
 	TEST_CHECK(result == EMPATHY_SUCCESS);
 }
 
-void testExecuteBytecode(Test_Context *context, const uint8_t *payload, size_t payload_size, Test_Values *values)
+void testExecuteBytecode(Test_Context *context, const uint8_t *payload, uint64_t payload_size, Test_Values *values)
 {
 	Empathy_EntryPointDesc entry = {0, EMPATHY_PROGRAM_OFFSET_NONE};
 	Empathy_ProgramDesc program_desc =

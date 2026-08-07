@@ -28,4 +28,4 @@ typedef struct Test_Context_t
 void testCheck(int passed, const char *condition, const char *file, int line);
 void testCreateContext(Test_Context *context);
 void testDestroyContext(Test_Context *context);
-void testExecuteBytecode(Test_Context *context, const uint8_t *payload, size_t payload_size, Test_Values *values);
+void testExecuteBytecode(Test_Context *context, const uint8_t *payload, uint64_t payload_size, Test_Values *values);

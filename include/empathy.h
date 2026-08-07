@@ -265,7 +265,7 @@ typedef struct Empathy_ProgramDesc_t
 	const Empathy_EntryPointDesc *entry_points;
 
 	uint32_t bytecode_version;
-	size_t bytecode_size;
+	uint64_t bytecode_size;
 	const void *bytecode_data;
 } Empathy_ProgramDesc;
 
