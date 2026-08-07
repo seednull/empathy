@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.10)
 project(empathy VERSION 1.0.0)
 
+include(CTest)
+
 # ==================================================================================================
 # Global includes
 # ==================================================================================================
@@ -73,4 +75,8 @@ add_subdirectory(src)
 if (EMPATHY_BUILD_SAMPLES)
 	add_subdirectory(samples/01_machine)
 	add_subdirectory(samples/02_narrative)
+endif()
+
+if (BUILD_TESTING)
+	add_subdirectory(tests/bytecode)
 endif()
