@@ -72,4 +72,5 @@ add_subdirectory(src)
 
 if (EMPATHY_BUILD_SAMPLES)
 	add_subdirectory(samples/01_machine)
+	add_subdirectory(samples/02_narrative)
 endif()
