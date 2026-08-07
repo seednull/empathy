@@ -1,93 +1,264 @@
 # Empathy
 
+Empathy is an embeddable C runtime for data-driven branching logic. A host application describes
+its data model, loads validated Empathy bytecode, binds native data tables, and drives execution,
+predicate matching, and yields through a small public API.
 
+The project is currently `1.0.0-dev`. The public API and bytecode tooling are still evolving; the
+current bytecode format is version `1.0`.
 
-## Getting started
+## Core model
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+An Empathy application is built from four kinds of objects:
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
+- `Empathy_Instance` owns every other runtime object.
+- `Empathy_ProgramLayout` describes atom domains, host parameters, and yield contracts.
+- `Empathy_Program` combines a layout, bytecode, and one or more entry points.
+- `Empathy_Machine` binds a program to host data and holds execution, predicate, and yield stacks.
 
-## Add your files
+A typical execution flow is:
 
-- [ ] [Create](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#create-a-file) or [upload](https://docs.gitlab.com/ee/user/project/repository/web_editor.html#upload-a-file) files
-- [ ] [Add files using the command line](https://docs.gitlab.com/topics/git/add_files/#add-files-to-a-git-repository) or push an existing Git repository with the following command:
+1. Create an instance.
+2. Create a program layout.
+3. Create a program from validated bytecode and entry points.
+4. Create a machine and bind the program.
+5. Bind the required host parameter tables.
+6. Optionally call `empathyMatch` to select an entry point by predicate.
+7. Bind an entry point and call `empathyRun` until execution ends or yields.
+8. Destroy the machine, program, layout, and instance in that order.
 
+Program layouts and programs copy their descriptors and bytecode during creation. Bound parameter
+tables remain owned by the host and must stay valid while a machine uses them. A layout must remain
+alive while programs and machines refer to it.
+
+### Atoms
+
+An `Empathy_Atom` is a pair of `uint32_t` values: `type` and `value`. Atom types are application
+defined. A program layout declares every accepted atom type together with its inclusive value range,
+allowing bytecode validation without embedding application strings or objects into the runtime.
+
+For example, a narrative host can use separate atom types for lines, characters, and choices while
+keeping the actual text in application-owned arrays or asset databases.
+
+### Parameters
+
+A parameter declaration maps a bytecode parameter index to:
+
+- a host parameter-table index;
+- a byte offset within that table;
+- an `Empathy_ValueType`;
+- read, write, or read/write access.
+
+The host binds table pointers with `empathyBindParameterTable`. Bytecode uses `LOAD` and `STORE`
+with zero-based parameter indices; the runtime performs type, access, and bounds checks.
+
+### Yields
+
+A yield declaration describes the values required to resume that yield. Bytecode prepares the yield
+stack and executes `YIELD` with a zero-based yield index. `empathyRun` then returns
+`EMPATHY_EXECUTION_YIELD`.
+
+While the machine is yielded, the host can:
+
+- inspect the yield index with `empathyGetYieldIndex`;
+- inspect or consume yielded values with `empathyGetYieldStackSize`, `empathyYieldStackPeek`, and
+  `empathyYieldStackPop`;
+- push response values with `empathyYieldStackPush`.
+
+Calling `empathyRun` again validates the response values against the declared resume types before
+continuing execution.
+
+### Entry points and predicates
+
+Every `Empathy_EntryPointDesc` contains a required execution offset and an optional predicate
+offset. Use `EMPATHY_PROGRAM_OFFSET_NONE` when an entry point has no predicate.
+
+`empathyMatch` evaluates predicate-bearing entry points and returns the value produced by each match
+together with its entry-point index. The host can then bind a selected entry point with
+`empathyBindProgramEntryPoint` and execute it with `empathyRun`.
+
+## Bytecode v1
+
+The source of truth for the current bytecode ABI is
+[`spec/bytecode-v1.json`](spec/bytecode-v1.json). It defines:
+
+- the bytecode major and minor version;
+- byte order and instruction alignment;
+- operand sizes;
+- execution-mode bits;
+- instruction names, opcode values, operands, and allowed modes.
+
+The JSON specification controls the generated ABI tables, but the following encoding rules are
+fixed parts of bytecode v1 rather than configurable format options.
+
+### Instruction encoding
+
+Bytecode is a contiguous sequence of byte-aligned instructions. Each instruction consists of a
+one-byte opcode followed immediately by the operands declared for that opcode in the specification.
+There is no padding between instructions.
+
+All multi-byte operands use little-endian byte order:
+
+| Operand | Size | Encoding |
+| --- | ---: | --- |
+| `u8`, `u16`, `u32`, `u64` | 1, 2, 4, 8 bytes | Unsigned binary integer |
+| `i8`, `i16`, `i32`, `i64` | 1, 2, 4, 8 bytes | Two's-complement signed integer |
+| `f32`, `f64` | 4, 8 bytes | IEEE 754 binary32 or binary64 |
+| `atom` | 8 bytes | Atom type as `u32`, then atom value as `u32` |
+| `parameter_index` | 4 bytes | Zero-based `u32` program-layout parameter index |
+| `yield_index` | 4 bytes | Zero-based `u32` program-layout yield index |
+| `program_offset` | 8 bytes | Absolute `u64` byte offset into the instruction stream |
+
+A `program_offset` is measured from the first byte of the bytecode stream. It is never relative to
+the current instruction and does not include an enclosing file or package header. Jump targets and
+entry-point offsets must identify the opcode byte at an instruction boundary.
+
+### Execution modes
+
+Instructions may be valid in execution mode, predicate mode, or both. The current instruction
+families are:
+
+| Family | Modes |
+| --- | --- |
+| Constants, `LOAD`, stack operations, arithmetic, comparisons, jumps | Execution and predicate |
+| `STORE`, yield-stack operations, `YIELD`, `END` | Execution only |
+| `REJECT`, conditional rejects, `MATCH` | Predicate only |
+
+The exact mode assignment for every opcode is authoritative in the JSON specification.
+
+### Validation
+
+Programs are validated when `empathyCreateProgram` is called.
+
+The validator allocates one byte of metadata per bytecode byte and performs two linear passes:
+
+1. Decode instruction boundaries, sizes, and allowed modes. An opcode byte stores its non-zero mode
+   mask; operand bytes remain zero.
+2. Validate instruction operands, atom ranges, parameter and yield indices, and jump targets using
+   the boundary table.
+
+After the instruction passes, every execution and predicate entry offset is checked for bounds,
+instruction alignment, and a compatible mode. This keeps boundary lookup constant-time and overall
+instruction-boundary processing linear in the bytecode size plus the number of entry points. Atom
+operand validation additionally scans the atom types declared by the program layout.
+
+The validator currently checks the mode of the instruction at each entry point, but it does not yet
+propagate modes through the complete control-flow graph. Full reachable-path mode validation is a
+future extension.
+
+### Versioning and compatibility
+
+`EMPATHY_BYTECODE_MAKE_VERSION(major, minor)` stores the major version in the upper 16 bits and the
+minor version in the lower 16 bits. `Empathy_ProgramDesc.bytecode_version` must currently equal
+`EMPATHY_BYTECODE_VERSION` exactly.
+
+Within bytecode major version 1, existing opcode numbers and operand encodings must not be changed or
+reused. An incompatible binary or semantic change requires a new major version.
+
+## Generating bytecode ABI declarations
+
+`tools/generate_bytecode.py` generates C ABI declarations and runtime lookup tables from a bytecode
+specification. It does not compile narrative source or produce a program's bytecode stream.
+
+Pass the specification path as the required positional argument:
+
+```sh
+python tools/generate_bytecode.py spec/bytecode-v1.json
 ```
-cd existing_repo
-git remote add origin https://gitlab.seednull.com/dev/projects/empathy.git
-git branch -M main
-git push -uf origin main
+
+Use `--check` to verify that generated regions are current without modifying files:
+
+```sh
+python tools/generate_bytecode.py spec/bytecode-v1.json --check
 ```
 
-## Integrate with your tools
+The generator updates only marked regions in:
 
-- [ ] [Set up project integrations](https://gitlab.seednull.com/dev/projects/empathy/-/settings/integrations)
+- `include/empathy.h`: bytecode version macros and `Empathy_BytecodeOpcode`;
+- `src/impl/impl_bytecode.c`: instruction-size and instruction-mode tables.
 
-## Collaborate with your team
+Generated regions contain a `Do not edit manually` notice. Change the JSON specification and rerun
+the generator instead of editing those regions directly. The bytecode fields in
+`Empathy_ProgramDesc` and the rest of the public API are maintained manually.
 
-- [ ] [Invite team members and collaborators](https://docs.gitlab.com/ee/user/project/members/)
-- [ ] [Create a new merge request](https://docs.gitlab.com/ee/user/project/merge_requests/creating_merge_requests.html)
-- [ ] [Automatically close issues from merge requests](https://docs.gitlab.com/ee/user/project/issues/managing_issues.html#closing-issues-automatically)
-- [ ] [Enable merge request approvals](https://docs.gitlab.com/ee/user/project/merge_requests/approvals/)
-- [ ] [Set auto-merge](https://docs.gitlab.com/user/project/merge_requests/auto_merge/)
+## Building
 
-## Test and Deploy
+Empathy uses CMake 3.10 or newer. The runtime and tests are written in C; the samples require a C++17
+compiler. Python 3 is needed only when regenerating bytecode ABI declarations.
 
-Use the built-in continuous integration in GitLab.
+Configure and build manually:
 
-- [ ] [Get started with GitLab CI/CD](https://docs.gitlab.com/ee/ci/quick_start/)
-- [ ] [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/ee/user/application_security/sast/)
-- [ ] [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/ee/topics/autodevops/requirements.html)
-- [ ] [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/ee/user/clusters/agent/)
-- [ ] [Set up protected environments](https://docs.gitlab.com/ee/ci/environments/protected_environments.html)
+```sh
+cmake -S . -B build -DEMPATHY_BUILD_SAMPLES=ON -DBUILD_TESTING=ON
+cmake --build build --config Debug
+```
 
-***
+Run the test suite:
 
-# Editing this README
+```sh
+ctest --test-dir build -C Debug --output-on-failure
+```
 
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
+Install the library and public header:
 
-## Suggestions for a good README
+```sh
+cmake --install build --config Release --prefix path/to/install
+```
 
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
+Useful CMake options and targets:
 
-## Name
-Choose a self-explaining name for your project.
+| Name | Purpose |
+| --- | --- |
+| `EMPATHY_BUILD_SAMPLES` | Build both samples; defaults to `ON` |
+| `BUILD_TESTING` | Build and register CTest tests |
+| `empathy` | Runtime library |
+| `01_machine` | Parameter-binding sample |
+| `02_narrative` | Interactive narrative sample |
+| `bytecode_tests` | Build all bytecode test executables |
 
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
+`CMakePresets.json` contains presets for Visual Studio, macOS Clang, and Emscripten. For example:
 
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
+```sh
+cmake --preset msvc2022-x64
+cmake --build --preset build-msvc2022-x64-debug
+```
 
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
+On Windows and macOS the runtime is currently built as a shared library. The Emscripten build uses a
+static library.
 
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
+## Samples
 
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
+[`samples/01_machine`](samples/01_machine) demonstrates the minimal runtime lifecycle, parameter
+layout declarations, native table binding, and execution of directly embedded bytecode.
 
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
+[`samples/02_narrative`](samples/02_narrative) demonstrates narrative flow with line, character, and
+choice atoms; line, choice, and dialogue yields; host-provided choice responses; branching; and a
+shared ending. All narrative data and bytecode are embedded directly in the sample.
 
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
+## Tests
 
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
+Bytecode tests are C executables under `tests/bytecode/src`, backed by the shared test library in
+`tests/bytecode/common`:
 
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
+- `test_bytecode_decode` covers scalar and atom operand decoding;
+- `test_bytecode_entry_points` covers instruction-boundary and entry-mode validation;
+- `test_bytecode_instruction_validation` covers malformed opcodes, operands, indices, atoms, and
+  jump targets.
 
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
+Tests use release-safe checks: Empathy API calls are evaluated separately, and test conditions remain
+active when `NDEBUG` is defined.
 
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
+## Repository layout
+
+```text
+include/             Public C API
+src/                 Runtime implementation
+spec/                Versioned bytecode ABI specifications
+tools/               Bytecode ABI generator
+samples/              Embedding and narrative examples
+tests/bytecode/       Bytecode validation and decoding tests
+```
 
 ## License
-For open source projects, say how it is licensed.
 
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+Empathy is available under the [MIT License](LICENSE).

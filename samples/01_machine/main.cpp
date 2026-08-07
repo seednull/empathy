@@ -46,12 +46,12 @@ void testMachine(Empathy_Instance instance)
 	 */
 	uint8_t payload[] =
 	{
-		0x0B, 0x01, 0x00, 0x00, 0x00,
-		0x0C, 0x02, 0x00, 0x00, 0x00,
-		0x22,
+		EMPATHY_BYTECODE_OP_LOAD, 0x01, 0x00, 0x00, 0x00,
+		EMPATHY_BYTECODE_OP_STORE, 0x02, 0x00, 0x00, 0x00,
+		EMPATHY_BYTECODE_OP_END,
 	};
 
-	Empathy_ProgramEntryPointDesc entries[] =
+	Empathy_EntryPointDesc entries[] =
 	{
 		0, EMPATHY_PROGRAM_OFFSET_NONE
 	};
@@ -60,7 +60,7 @@ void testMachine(Empathy_Instance instance)
 	{
 		layout,
 		1, entries,
-		sizeof(payload), payload,
+		EMPATHY_BYTECODE_VERSION, sizeof(payload), payload,
 	};
 
 	Empathy_Program program = EMPATHY_NULL_HANDLE;
