@@ -167,6 +167,18 @@ Empathy_Result empathyRun(Empathy_Instance instance, Empathy_Machine machine)
 	return ptr->vtbl->run(instance, machine);
 }
 
+Empathy_Result empathyMatch(Empathy_Instance instance, Empathy_Machine machine, uint32_t max_count, Empathy_MatchResult *results, uint32_t *result_count)
+{
+	if (instance == EMPATHY_NULL_HANDLE)
+		return EMPATHY_INVALID_INSTANCE;
+
+	Empathy_InstanceInternal *ptr = (Empathy_InstanceInternal *)instance;
+	assert(ptr->vtbl);
+	assert(ptr->vtbl->match);
+
+	return ptr->vtbl->match(instance, machine, max_count, results, result_count);
+}
+
 Empathy_Result empathyGetYieldStackSize(Empathy_Instance instance, Empathy_Machine machine, uint32_t *size)
 {
 	if (instance == EMPATHY_NULL_HANDLE)

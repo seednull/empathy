@@ -495,6 +495,75 @@ Empathy_Result impl_instanceRun(Empathy_Instance this, Empathy_Machine machine)
 	return result;
 }
 
+Empathy_Result impl_instanceMatch(Empathy_Instance this, Empathy_Machine machine, uint32_t max_count, Empathy_MatchResult *results, uint32_t *result_count)
+{
+	assert(this);
+	assert(machine);
+	assert(results);
+	assert(result_count);
+
+	Impl_Instance *instance_ptr = (Impl_Instance *)this;
+	Impl_Machine *machine_ptr = (Impl_Machine *)empathy_poolGetElement(&instance_ptr->machines, (Empathy_PoolHandle)machine);
+	assert(machine_ptr->execution.stack.data);
+	assert(machine_ptr->execution.stack.size > 0);
+	assert(machine_ptr->execution.stack.head <= machine_ptr->execution.stack.size);
+
+	if (machine_ptr->state == IMPL_MACHINE_STATE_UNBOUND)
+		return EMPATHY_PROGRAM_NOT_BOUND;
+
+	Impl_ProgramLayout *program_layout_ptr = (Impl_ProgramLayout *)empathy_poolGetElement(&instance_ptr->program_layouts, (Empathy_PoolHandle)machine_ptr->common.layout);
+	assert(program_layout_ptr);
+
+	Impl_Program *program_ptr = (Impl_Program *)empathy_poolGetElement(&instance_ptr->programs, (Empathy_PoolHandle)machine_ptr->common.program);
+	assert(program_ptr);
+	assert(program_ptr->data);
+	assert(program_ptr->size);
+	assert(program_ptr->layout == machine_ptr->common.layout);
+
+	Impl_MachineStack *stack = &machine_ptr->predicate.stack;
+
+	uint32_t matched_count = 0;
+	for (uint32_t i = 0; i < program_ptr->num_entry_points; ++i)
+	{
+		if (matched_count == max_count)
+			break;
+
+		const Impl_EntryPoint *entry = &program_ptr->entry_points[i];
+		if (entry->predicate_offset == EMPATHY_PROGRAM_OFFSET_NONE)
+			continue;
+
+		stack->head = 0;
+
+		Impl_ExecutionContext context = {0};
+		context.program = program_ptr;
+		context.layout = program_layout_ptr;
+		context.execution.instruction_pointer = entry->predicate_offset;
+		context.execution.stack = *stack;
+		context.yield = machine_ptr->yield;
+		context.bindings = machine_ptr->common.bindings;
+		context.max_bindings = machine_ptr->common.max_bindings;
+		context.mode = IMPL_OPCODE_MODE_PREDICATE;
+
+		Empathy_Result result = impl_bytecodeExecute(&context, machine_ptr->common.instruction_limit);
+
+		if (result == EMPATHY_PREDICATE_REJECTED)
+			continue;
+
+		if (result != EMPATHY_PREDICATE_MATCHED)
+			return result;
+
+		assert(stack->head > 0);
+
+		Empathy_MatchResult match_result = {0};
+		match_result.value = stack->data[stack->head - 1];
+		match_result.entry_point_index = i;
+
+		results[matched_count++] = match_result;
+	}
+
+	return EMPATHY_SUCCESS;
+}
+
 Empathy_Result impl_instanceGetYieldStackSize(Empathy_Instance this, Empathy_Machine machine, uint32_t *size)
 {
 	assert(this);
@@ -612,7 +681,9 @@ static Empathy_InstanceTable instance_vtbl =
 	impl_instanceBindProgram,
 	impl_instanceBindProgramEntryPoint,
 	impl_instanceBindParameterTable,
+
 	impl_instanceRun,
+	impl_instanceMatch,
 
 	impl_instanceGetYieldStackSize,
 	impl_instanceGetYieldIndex,

@@ -1013,25 +1013,52 @@ Empathy_Result impl_bytecodeExecute(Impl_ExecutionContext *context, uint32_t ins
 
 			case IMPL_OPCODE_REJECT:
 			{
-				return EMPATHY_NOT_IMPLEMENTED;
+				context->execution.instruction_pointer += instruction_size;
+				return EMPATHY_PREDICATE_REJECTED;
 			}
 			break;
 
 			case IMPL_OPCODE_REJECT_FALSE:
 			{
-				return EMPATHY_NOT_IMPLEMENTED;
+				if (stack->head == 0)
+					return EMPATHY_STACK_UNDERFLOW;
+
+				Empathy_Value value = stack->data[stack->head - 1];
+				if (value.type.base_type != EMPATHY_VALUE_BASE_TYPE_UINT8)
+					return EMPATHY_INVALID_OPERAND_TYPE;
+
+				if (value.data.u8 == 0)
+				{
+					context->execution.instruction_pointer += instruction_size;
+					return EMPATHY_PREDICATE_REJECTED;
+				}
 			}
 			break;
 
 			case IMPL_OPCODE_REJECT_TRUE:
 			{
-				return EMPATHY_NOT_IMPLEMENTED;
+				if (stack->head == 0)
+					return EMPATHY_STACK_UNDERFLOW;
+
+				Empathy_Value value = stack->data[stack->head - 1];
+				if (value.type.base_type != EMPATHY_VALUE_BASE_TYPE_UINT8)
+					return EMPATHY_INVALID_OPERAND_TYPE;
+
+				if (value.data.u8 != 0)
+				{
+					context->execution.instruction_pointer += instruction_size;
+					return EMPATHY_PREDICATE_REJECTED;
+				}
 			}
 			break;
 
 			case IMPL_OPCODE_MATCH:
 			{
-				return EMPATHY_NOT_IMPLEMENTED;
+				if (stack->head == 0)
+					return EMPATHY_STACK_UNDERFLOW;
+
+				context->execution.instruction_pointer += instruction_size;
+				return EMPATHY_PREDICATE_MATCHED;
 			}
 			break;
 

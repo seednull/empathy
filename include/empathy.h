@@ -50,6 +50,8 @@ typedef enum Empathy_Result_t
 	EMPATHY_SUCCESS = 0,
 	EMPATHY_EXECUTION_YIELD,
 	EMPATHY_EXECUTION_END,
+	EMPATHY_PREDICATE_MATCHED,
+	EMPATHY_PREDICATE_REJECTED,
 	EMPATHY_NOT_IMPLEMENTED,
 	EMPATHY_INVALID_INSTANCE,
 	EMPATHY_INVALID_OUTPUT_ARGUMENT,
@@ -207,6 +209,12 @@ typedef struct Empathy_MachineDesc_t
 	uint32_t instruction_limit;
 } Empathy_MachineDesc;
 
+typedef struct Empathy_MatchResult_t
+{
+	Empathy_Value value;
+	uint32_t entry_point_index;
+} Empathy_MatchResult;
+
 // Function pointers
 typedef Empathy_Result (*PFN_empathyCreateProgramLayout)(Empathy_Instance instance, const Empathy_ProgramLayoutDesc *desc, Empathy_ProgramLayout *layout);
 typedef Empathy_Result (*PFN_empathyCreateProgram)(Empathy_Instance instance, const Empathy_ProgramDesc *desc, Empathy_Program *program);
@@ -220,7 +228,9 @@ typedef Empathy_Result (*PFN_empathyDestroyInstance)(Empathy_Instance instance);
 typedef Empathy_Result (*PFN_empathyBindProgram)(Empathy_Instance instance, Empathy_Machine machine, Empathy_Program program);
 typedef Empathy_Result (*PFN_empathyBindProgramEntryPoint)(Empathy_Instance instance, Empathy_Machine machine, uint32_t index);
 typedef Empathy_Result (*PFN_empathyBindParameterTable)(Empathy_Instance instance, Empathy_Machine machine, uint32_t index, uint64_t size, void *data);
+
 typedef Empathy_Result (*PFN_empathyRun)(Empathy_Instance instance, Empathy_Machine machine);
+typedef Empathy_Result (*PFN_empathyMatch)(Empathy_Instance instance, Empathy_Machine machine, uint32_t max_count, Empathy_MatchResult *results, uint32_t *result_count);
 
 typedef Empathy_Result (*PFN_empathyGetYieldStackSize)(Empathy_Instance instance, Empathy_Machine machine, uint32_t *size);
 typedef Empathy_Result (*PFN_empathyGetYieldIndex)(Empathy_Instance instance, Empathy_Machine machine, uint32_t *index);
@@ -243,7 +253,9 @@ typedef struct Empathy_InstanceTable_t
 	PFN_empathyBindProgram bindProgram;
 	PFN_empathyBindProgramEntryPoint bindProgramEntryPoint;
 	PFN_empathyBindParameterTable bindParameterTable;
+
 	PFN_empathyRun run;
+	PFN_empathyMatch match;
 
 	PFN_empathyGetYieldStackSize getYieldStackSize;
 	PFN_empathyGetYieldIndex getYieldIndex;
@@ -269,7 +281,9 @@ EMPATHY_APIENTRY Empathy_Result empathyDestroyInstance(Empathy_Instance instance
 EMPATHY_APIENTRY Empathy_Result empathyBindProgram(Empathy_Instance instance, Empathy_Machine machine, Empathy_Program program);
 EMPATHY_APIENTRY Empathy_Result empathyBindProgramEntryPoint(Empathy_Instance instance, Empathy_Machine machine, uint32_t index);
 EMPATHY_APIENTRY Empathy_Result empathyBindParameterTable(Empathy_Instance instance, Empathy_Machine machine, uint32_t index, uint64_t size, void *data);
+
 EMPATHY_APIENTRY Empathy_Result empathyRun(Empathy_Instance instance, Empathy_Machine machine);
+EMPATHY_APIENTRY Empathy_Result empathyMatch(Empathy_Instance instance, Empathy_Machine machine, uint32_t max_count, Empathy_MatchResult *results, uint32_t *result_count);
 
 EMPATHY_APIENTRY Empathy_Result empathyGetYieldStackSize(Empathy_Instance instance, Empathy_Machine machine, uint32_t *size);
 EMPATHY_APIENTRY Empathy_Result empathyGetYieldIndex(Empathy_Instance instance, Empathy_Machine machine, uint32_t *index);
