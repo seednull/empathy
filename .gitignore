@@ -6,3 +6,8 @@
 
 # Mac OS specific
 .DS_Store
+
+# Obsidian plugin build outputs
+plugins/obsidian/node_modules/
+plugins/obsidian/main.js
+plugins/obsidian/compile.test.cjs

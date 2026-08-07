@@ -157,8 +157,9 @@ reused. An incompatible binary or semantic change requires a new major version.
 
 ## Generating bytecode ABI declarations
 
-`tools/generate_bytecode.py` generates C ABI declarations and runtime lookup tables from a bytecode
-specification. It does not compile narrative source or produce a program's bytecode stream.
+`tools/generate_bytecode.py` generates C ABI declarations, runtime lookup tables, and the Obsidian
+plugin's TypeScript bytecode constants and low-level writer. It does not compile narrative source or
+produce a program's bytecode stream.
 
 Pass the specification path as the required positional argument:
 
@@ -172,14 +173,77 @@ Use `--check` to verify that generated regions are current without modifying fil
 python tools/generate_bytecode.py spec/bytecode-v1.json --check
 ```
 
-The generator updates only marked regions in:
+The generator updates marked regions in:
 
 - `include/empathy.h`: bytecode version macros and `Empathy_BytecodeOpcode`;
 - `src/impl/impl_bytecode.c`: instruction-size and instruction-mode tables.
 
+It also generates the complete `plugins/obsidian/src/bytecode.ts` file. Constants come from the JSON
+specification; the small writer body comes from `tools/bytecode_writer.ts.in`. `--check` verifies all
+three outputs.
+
 Generated regions contain a `Do not edit manually` notice. Change the JSON specification and rerun
 the generator instead of editing those regions directly. The bytecode fields in
 `Empathy_ProgramDesc` and the rest of the public API are maintained manually.
+
+## Obsidian Canvas proof of concept
+
+The deliberately small plugin under `plugins/obsidian/` compiles the active Canvas runtime graph
+directly to an Empathy bytecode payload and a companion C/C++ header next to the `.canvas` file.
+
+### Frozen POC baseline
+
+Plugin version `0.0.3` targets and has been exercised with Obsidian Desktop `1.13.4`; the manifest is
+desktop-only and compatibility with other Obsidian releases is not claimed. Its locked build uses
+Obsidian API typings `1.13.1`—that package version is not the runtime application version. The
+recorded build toolchain is Node.js `22.17.1` with npm `11.4.2`.
+
+Known limitations are deliberate: the plugin depends on undocumented Canvas runtime objects,
+accepts only its current metadata schema, and provides no migration or backward compatibility.
+Standard Canvas cards outside the reachable story graph are ignored, so they can still be used for
+notes. Only nodes reachable from an `ENTRY` are emitted. Choice options are ordered by Canvas edge
+ID, and multiple entry points are ordered by their Canvas node ID. The five-button toolbar may be
+clipped in an unusually narrow split pane; the background menu and commands remain available.
+
+### Build and install
+
+```sh
+cd plugins/obsidian
+npm ci
+npm run verify
+```
+
+`npm run verify` runs the mocked Canvas compiler tests, performs a TypeScript check, and builds the
+plugin. The individual `npm test`, `npm run typecheck`, and `npm run build` commands remain available.
+Before freezing a release, also run the bytecode generator's `--check` command shown above from the
+repository root; normal plugin builds do not require Python. Copy `plugins/obsidian/main.js`,
+`plugins/obsidian/manifest.json`, and `plugins/obsidian/styles.css` into
+`<vault>/.obsidian/plugins/empathy-canvas-poc/`, then reload Obsidian and enable **Empathy** under
+**Settings -> Community plugins**.
+
+With a Canvas open, use the five colored Empathy buttons in its bottom card toolbar to add an
+**ENTRY**, **SAY**, **LINE**, **CHOICE**, or **END** at the viewport center. Precise placement remains
+available by right-clicking the empty background and choosing the corresponding **Add Empathy**
+action. The same actions are available in the command palette, and an existing text card can be
+converted from its context menu. Every typed card has a persistent visual header. `SAY` additionally
+has a separate character input; its native Canvas text editor contains only the dialogue.
+
+A ready-to-open branching example using every node type is available at
+`plugins/obsidian/examples/signal-tower-demo.canvas`.
+
+The cards are stored as standard JSON Canvas text nodes with an `empathyKind` metadata field. `SAY`
+also stores its character in `empathyCharacter`, keeping semantic fields out of the dialogue text:
+
+| Node | Card text | Edges |
+| --- | --- | --- |
+| `ENTRY` | Empty (or an optional note) | Exactly one outgoing edge |
+| `SAY` | Dialogue only; character is edited in the header | Exactly one outgoing edge |
+| `LINE` | The complete line | Exactly one outgoing edge |
+| `CHOICE` | Empty (or an optional note) | One or more labeled outgoing edges |
+| `END` | Empty (or an optional note) | No outgoing edges |
+
+Text-marker nodes and combined `Character\nDialogue` SAY payloads are not migrated or compiled;
+converting an ordinary text card treats its text literally.
 
 ## Building
 
@@ -255,6 +319,7 @@ include/             Public C API
 src/                 Runtime implementation
 spec/                Versioned bytecode ABI specifications
 tools/               Bytecode ABI generator
+plugins/obsidian/     Canvas compiler proof-of-concept plugin
 samples/              Embedding and narrative examples
 tests/bytecode/       Bytecode validation and decoding tests
 ```

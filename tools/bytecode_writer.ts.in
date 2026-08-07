@@ -1,0 +1,68 @@
+export class BytecodeWriter {
+    private readonly data: number[] = [];
+
+    get offset(): number {
+        return this.data.length;
+    }
+
+    private unsignedBytes(value: number, maximum: number, size: number, label: string): number[] {
+        if (!Number.isInteger(value) || value < 0 || value > maximum) {
+            throw new Error(`Value is not a ${label}: ${value}`);
+        }
+        const bytes: number[] = [];
+        for (let byte = 0; byte < size; ++byte) {
+            bytes.push(value % 0x100);
+            value = Math.floor(value / 0x100);
+        }
+        return bytes;
+    }
+
+    private uint64Bytes(value: number | bigint): number[] {
+        const integer = typeof value === "bigint"
+            ? value
+            : Number.isSafeInteger(value) ? BigInt(value) : -1n;
+        if (integer < 0n || integer > 0xFFFFFFFFFFFFFFFFn) {
+            throw new Error(`Value is not a uint64: ${value}`);
+        }
+        return Array.from({ length: 8 }, (_, byte) =>
+            Number((integer >> BigInt(byte * 8)) & 0xFFn));
+    }
+
+    u8(value: number): void {
+        this.data.push(...this.unsignedBytes(value, 0xFF, 1, "uint8"));
+    }
+
+    u16(value: number): void {
+        this.data.push(...this.unsignedBytes(value, 0xFFFF, 2, "uint16"));
+    }
+
+    u32(value: number): void {
+        this.data.push(...this.unsignedBytes(value, 0xFFFFFFFF, 4, "uint32"));
+    }
+
+    u64(value: number | bigint): void {
+        this.data.push(...this.uint64Bytes(value));
+    }
+
+    atom(type: number, value: number): void {
+        const typeBytes = this.unsignedBytes(type, 0xFFFFFFFF, 4, "uint32");
+        const valueBytes = this.unsignedBytes(value, 0xFFFFFFFF, 4, "uint32");
+        this.data.push(...typeBytes, ...valueBytes);
+    }
+
+    opcode(value: number): void {
+        this.u8(value);
+    }
+
+    patchU64(offset: number, value: number | bigint): void {
+        if (!Number.isInteger(offset) || offset < 0 || offset + 8 > this.data.length) {
+            throw new Error(`Invalid uint64 patch offset: ${offset}`);
+        }
+        const bytes = this.uint64Bytes(value);
+        for (let byte = 0; byte < bytes.length; ++byte) this.data[offset + byte] = bytes[byte];
+    }
+
+    finish(): Uint8Array {
+        return Uint8Array.from(this.data);
+    }
+}

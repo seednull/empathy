@@ -1,0 +1,9 @@
+{
+    "id": "empathy-canvas-poc",
+    "name": "Empathy",
+    "version": "0.0.3",
+    "minAppVersion": "1.13.4",
+    "description": "Proof-of-concept Canvas to Empathy bytecode compiler.",
+    "author": "Empathy contributors",
+    "isDesktopOnly": true
+}
