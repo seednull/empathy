@@ -504,9 +504,9 @@ Empathy_Result impl_instanceMatch(Empathy_Instance this, Empathy_Machine machine
 
 	Impl_Instance *instance_ptr = (Impl_Instance *)this;
 	Impl_Machine *machine_ptr = (Impl_Machine *)empathy_poolGetElement(&instance_ptr->machines, (Empathy_PoolHandle)machine);
-	assert(machine_ptr->execution.stack.data);
-	assert(machine_ptr->execution.stack.size > 0);
-	assert(machine_ptr->execution.stack.head <= machine_ptr->execution.stack.size);
+	assert(machine_ptr->predicate.stack.data);
+	assert(machine_ptr->predicate.stack.size > 0);
+	assert(machine_ptr->predicate.stack.head <= machine_ptr->predicate.stack.size);
 
 	if (machine_ptr->state == IMPL_MACHINE_STATE_UNBOUND)
 		return EMPATHY_PROGRAM_NOT_BOUND;
