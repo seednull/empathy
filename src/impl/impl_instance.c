@@ -495,6 +495,110 @@ Empathy_Result impl_instanceRun(Empathy_Instance this, Empathy_Machine machine)
 	return result;
 }
 
+Empathy_Result impl_instanceGetYieldStackSize(Empathy_Instance this, Empathy_Machine machine, uint32_t *size)
+{
+	assert(this);
+	assert(machine);
+	assert(size);
+
+	Impl_Instance *instance_ptr = (Impl_Instance *)this;
+	Impl_Machine *machine_ptr = (Impl_Machine *)empathy_poolGetElement(&instance_ptr->machines, (Empathy_PoolHandle)machine);
+	assert(machine_ptr);
+
+	if (machine_ptr->state != IMPL_MACHINE_STATE_YIELDED)
+		return EMPATHY_MACHINE_NOT_YIELDED;
+
+	*size = machine_ptr->yield.stack.size;
+	return EMPATHY_SUCCESS;
+}
+
+Empathy_Result impl_instanceGetYieldIndex(Empathy_Instance this, Empathy_Machine machine, uint32_t *index)
+{
+	assert(this);
+	assert(machine);
+	assert(index);
+
+	Impl_Instance *instance_ptr = (Impl_Instance *)this;
+	Impl_Machine *machine_ptr = (Impl_Machine *)empathy_poolGetElement(&instance_ptr->machines, (Empathy_PoolHandle)machine);
+	assert(machine_ptr);
+
+	if (machine_ptr->state != IMPL_MACHINE_STATE_YIELDED)
+		return EMPATHY_MACHINE_NOT_YIELDED;
+
+	assert(machine_ptr->yield.index != UINT32_MAX);
+
+	*index = machine_ptr->yield.index;
+	return EMPATHY_SUCCESS;
+}
+
+Empathy_Result impl_instanceYieldStackPush(Empathy_Instance this, Empathy_Machine machine, Empathy_Value value)
+{
+	assert(this);
+	assert(machine);
+
+	Impl_Instance *instance_ptr = (Impl_Instance *)this;
+	Impl_Machine *machine_ptr = (Impl_Machine *)empathy_poolGetElement(&instance_ptr->machines, (Empathy_PoolHandle)machine);
+	assert(machine_ptr);
+
+	if (machine_ptr->state != IMPL_MACHINE_STATE_YIELDED)
+		return EMPATHY_MACHINE_NOT_YIELDED;
+
+	Impl_MachineStack *stack = &machine_ptr->yield.stack;
+
+	if (stack->head >= stack->size)
+		return EMPATHY_STACK_OVERFLOW;
+
+	stack->data[stack->head++] = value;
+	return EMPATHY_SUCCESS;
+}
+
+Empathy_Result impl_instanceYieldStackPop(Empathy_Instance this, Empathy_Machine machine, Empathy_Value *value)
+{
+	assert(this);
+	assert(machine);
+	assert(value);
+
+	Impl_Instance *instance_ptr = (Impl_Instance *)this;
+	Impl_Machine *machine_ptr = (Impl_Machine *)empathy_poolGetElement(&instance_ptr->machines, (Empathy_PoolHandle)machine);
+	assert(machine_ptr);
+
+	if (machine_ptr->state != IMPL_MACHINE_STATE_YIELDED)
+		return EMPATHY_MACHINE_NOT_YIELDED;
+
+	Impl_MachineStack *stack = &machine_ptr->yield.stack;
+
+	if (stack->head == 0)
+		return EMPATHY_STACK_UNDERFLOW;
+
+	*value = stack->data[--stack->head];
+	return EMPATHY_SUCCESS;
+}
+
+Empathy_Result impl_instanceYieldStackPeek(Empathy_Instance this, Empathy_Machine machine, uint32_t depth, Empathy_Value *value)
+{
+	assert(this);
+	assert(machine);
+	assert(value);
+
+	Impl_Instance *instance_ptr = (Impl_Instance *)this;
+	Impl_Machine *machine_ptr = (Impl_Machine *)empathy_poolGetElement(&instance_ptr->machines, (Empathy_PoolHandle)machine);
+	assert(machine_ptr);
+
+	if (machine_ptr->state != IMPL_MACHINE_STATE_YIELDED)
+		return EMPATHY_MACHINE_NOT_YIELDED;
+
+	Impl_MachineStack *stack = &machine_ptr->yield.stack;
+
+	if (stack->head == 0)
+		return EMPATHY_STACK_UNDERFLOW;
+
+	if (depth >= stack->size)
+		return EMPATHY_STACK_UNDERFLOW;
+
+	*value = stack->data[stack->head - 1 - depth];
+	return EMPATHY_SUCCESS;
+}
+
 /*
  */
 static Empathy_InstanceTable instance_vtbl =

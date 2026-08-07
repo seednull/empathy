@@ -303,9 +303,7 @@ Empathy_Result impl_bytecodeExecute(Impl_ExecutionContext *context, uint32_t ins
 				value.type.base_type = EMPATHY_VALUE_BASE_TYPE_UINT32;
 				value.data.u32 = data;
 
-
 				stack->data[stack->head++] = value;
-
 			}
 			break;
 

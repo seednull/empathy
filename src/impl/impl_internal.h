@@ -17,6 +17,16 @@ typedef enum Impl_MachineState_t
 	IMPL_MACHINE_STATE_ENUM_FORCE32 = 0x7FFFFFFF,
 } Impl_MachineState;
 
+typedef enum Impl_PredicateResult_t
+{
+	IMPL_PREDICATE_RESULT_UNDEFINED = 0,
+	IMPL_PREDICATE_RESULT_REJECTED,
+	IMPL_PREDICATE_RESULT_MATCHED,
+
+	IMPL_PREDICATE_RESULT_ENUM_MAX,
+	IMPL_PREDICATE_RESULT_ENUM_FORCE32 = 0x7FFFFFFF,
+} Impl_PredicateResult;
+
 typedef enum Impl_OpcodeMode_t
 {
 	IMPL_OPCODE_MODE_EXECUTION = 0x00000001,
@@ -200,6 +210,7 @@ typedef struct Impl_MachineExecutionState_t
 typedef struct Impl_MachinePredicateState_t
 {
 	Impl_MachineStack stack;
+	Impl_PredicateResult result;
 } Impl_MachinePredicateState;
 
 typedef struct Impl_Machine_t

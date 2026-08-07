@@ -57,13 +57,14 @@ typedef enum Empathy_Result_t
 	EMPATHY_INVALID_INSTRUCTION_DATA,
 	EMPATHY_INVALID_OPERAND_TYPE,
 	EMPATHY_INVALID_RESUME_STATE,
+	EMPATHY_MACHINE_NOT_YIELDED,
 	EMPATHY_PROGRAM_NOT_BOUND,
 	EMPATHY_PROGRAM_ENTRY_POINT_NOT_BOUND,
+	EMPATHY_PROGRAM_OUT_OF_BOUNDS_READ,
 	EMPATHY_PARAMETER_NOT_READABLE,
 	EMPATHY_PARAMETER_NOT_WRITABLE,
 	EMPATHY_PARAMETER_TABLE_OUT_OF_BOUNDS_READ,
 	EMPATHY_PARAMETER_TABLE_OUT_OF_BOUNDS_WRITE,
-	EMPATHY_PROGRAM_OUT_OF_BOUNDS_READ,
 	EMPATHY_BASE_TYPE_MISMATCH,
 	EMPATHY_ATOM_TYPE_MISMATCH,
 	EMPATHY_STACK_OVERFLOW,
@@ -221,6 +222,12 @@ typedef Empathy_Result (*PFN_empathyBindProgramEntryPoint)(Empathy_Instance inst
 typedef Empathy_Result (*PFN_empathyBindParameterTable)(Empathy_Instance instance, Empathy_Machine machine, uint32_t index, uint64_t size, void *data);
 typedef Empathy_Result (*PFN_empathyRun)(Empathy_Instance instance, Empathy_Machine machine);
 
+typedef Empathy_Result (*PFN_empathyGetYieldStackSize)(Empathy_Instance instance, Empathy_Machine machine, uint32_t *size);
+typedef Empathy_Result (*PFN_empathyGetYieldIndex)(Empathy_Instance instance, Empathy_Machine machine, uint32_t *index);
+typedef Empathy_Result (*PFN_empathyYieldStackPush)(Empathy_Instance instance, Empathy_Machine machine, Empathy_Value value);
+typedef Empathy_Result (*PFN_empathyYieldStackPop)(Empathy_Instance instance, Empathy_Machine machine, Empathy_Value *value);
+typedef Empathy_Result (*PFN_empathyYieldStackPeek)(Empathy_Instance instance, Empathy_Machine machine, uint32_t depth, Empathy_Value *value);
+
 
 typedef struct Empathy_InstanceTable_t
 {
@@ -237,6 +244,12 @@ typedef struct Empathy_InstanceTable_t
 	PFN_empathyBindProgramEntryPoint bindProgramEntryPoint;
 	PFN_empathyBindParameterTable bindParameterTable;
 	PFN_empathyRun run;
+
+	PFN_empathyGetYieldStackSize getYieldStackSize;
+	PFN_empathyGetYieldIndex getYieldIndex;
+	PFN_empathyYieldStackPush yieldStackPush;
+	PFN_empathyYieldStackPop yieldStackPop;
+	PFN_empathyYieldStackPeek yieldStackPeek;
 } Empathy_InstanceTable;
 
 // API
@@ -257,6 +270,12 @@ EMPATHY_APIENTRY Empathy_Result empathyBindProgram(Empathy_Instance instance, Em
 EMPATHY_APIENTRY Empathy_Result empathyBindProgramEntryPoint(Empathy_Instance instance, Empathy_Machine machine, uint32_t index);
 EMPATHY_APIENTRY Empathy_Result empathyBindParameterTable(Empathy_Instance instance, Empathy_Machine machine, uint32_t index, uint64_t size, void *data);
 EMPATHY_APIENTRY Empathy_Result empathyRun(Empathy_Instance instance, Empathy_Machine machine);
+
+EMPATHY_APIENTRY Empathy_Result empathyGetYieldStackSize(Empathy_Instance instance, Empathy_Machine machine, uint32_t *size);
+EMPATHY_APIENTRY Empathy_Result empathyGetYieldIndex(Empathy_Instance instance, Empathy_Machine machine, uint32_t *index);
+EMPATHY_APIENTRY Empathy_Result empathyYieldStackPush(Empathy_Instance instance, Empathy_Machine machine, Empathy_Value value);
+EMPATHY_APIENTRY Empathy_Result empathyYieldStackPop(Empathy_Instance instance, Empathy_Machine machine, Empathy_Value *value);
+EMPATHY_APIENTRY Empathy_Result empathyYieldStackPeek(Empathy_Instance instance, Empathy_Machine machine, uint32_t depth, Empathy_Value *value);
 #endif
 
 #ifdef __cplusplus

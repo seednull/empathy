@@ -166,3 +166,63 @@ Empathy_Result empathyRun(Empathy_Instance instance, Empathy_Machine machine)
 
 	return ptr->vtbl->run(instance, machine);
 }
+
+Empathy_Result empathyGetYieldStackSize(Empathy_Instance instance, Empathy_Machine machine, uint32_t *size)
+{
+	if (instance == EMPATHY_NULL_HANDLE)
+		return EMPATHY_INVALID_INSTANCE;
+
+	Empathy_InstanceInternal *ptr = (Empathy_InstanceInternal *)instance;
+	assert(ptr->vtbl);
+	assert(ptr->vtbl->getYieldStackSize);
+
+	return ptr->vtbl->getYieldStackSize(instance, machine, size);
+}
+
+Empathy_Result empathyGetYieldIndex(Empathy_Instance instance, Empathy_Machine machine, uint32_t *index)
+{
+	if (instance == EMPATHY_NULL_HANDLE)
+		return EMPATHY_INVALID_INSTANCE;
+
+	Empathy_InstanceInternal *ptr = (Empathy_InstanceInternal *)instance;
+	assert(ptr->vtbl);
+	assert(ptr->vtbl->getYieldIndex);
+
+	return ptr->vtbl->getYieldIndex(instance, machine, index);
+}
+
+Empathy_Result empathyYieldStackPush(Empathy_Instance instance, Empathy_Machine machine, Empathy_Value value)
+{
+	if (instance == EMPATHY_NULL_HANDLE)
+		return EMPATHY_INVALID_INSTANCE;
+
+	Empathy_InstanceInternal *ptr = (Empathy_InstanceInternal *)instance;
+	assert(ptr->vtbl);
+	assert(ptr->vtbl->yieldStackPush);
+
+	return ptr->vtbl->yieldStackPush(instance, machine, value);
+}
+
+Empathy_Result empathyYieldStackPop(Empathy_Instance instance, Empathy_Machine machine, Empathy_Value *value)
+{
+	if (instance == EMPATHY_NULL_HANDLE)
+		return EMPATHY_INVALID_INSTANCE;
+
+	Empathy_InstanceInternal *ptr = (Empathy_InstanceInternal *)instance;
+	assert(ptr->vtbl);
+	assert(ptr->vtbl->yieldStackPop);
+
+	return ptr->vtbl->yieldStackPop(instance, machine, value);
+}
+
+Empathy_Result empathyYieldStackPeek(Empathy_Instance instance, Empathy_Machine machine, uint32_t depth, Empathy_Value *value)
+{
+	if (instance == EMPATHY_NULL_HANDLE)
+		return EMPATHY_INVALID_INSTANCE;
+
+	Empathy_InstanceInternal *ptr = (Empathy_InstanceInternal *)instance;
+	assert(ptr->vtbl);
+	assert(ptr->vtbl->yieldStackPeek);
+
+	return ptr->vtbl->yieldStackPeek(instance, machine, depth, value);
+}
