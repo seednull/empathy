@@ -520,8 +520,7 @@ Empathy_Result impl_instanceMatch(Empathy_Instance this, Empathy_Machine machine
 	assert(program_ptr->size);
 	assert(program_ptr->layout == machine_ptr->common.layout);
 
-	Impl_MachineStack *stack = &machine_ptr->predicate.stack;
-
+	*result_count = 0;
 	uint32_t matched_count = 0;
 	for (uint32_t i = 0; i < program_ptr->num_entry_points; ++i)
 	{
@@ -532,13 +531,14 @@ Empathy_Result impl_instanceMatch(Empathy_Instance this, Empathy_Machine machine
 		if (entry->predicate_offset == EMPATHY_PROGRAM_OFFSET_NONE)
 			continue;
 
-		stack->head = 0;
+		Impl_MachineStack stack = machine_ptr->predicate.stack;
+		stack.head = 0;
 
 		Impl_ExecutionContext context = {0};
 		context.program = program_ptr;
 		context.layout = program_layout_ptr;
 		context.execution.instruction_pointer = entry->predicate_offset;
-		context.execution.stack = *stack;
+		context.execution.stack = stack;
 		context.yield = machine_ptr->yield;
 		context.bindings = machine_ptr->common.bindings;
 		context.max_bindings = machine_ptr->common.max_bindings;
@@ -546,21 +546,24 @@ Empathy_Result impl_instanceMatch(Empathy_Instance this, Empathy_Machine machine
 
 		Empathy_Result result = impl_bytecodeExecute(&context, machine_ptr->common.instruction_limit);
 
+		stack = context.execution.stack;
+
 		if (result == EMPATHY_PREDICATE_REJECTED)
 			continue;
 
 		if (result != EMPATHY_PREDICATE_MATCHED)
 			return result;
 
-		assert(stack->head > 0);
+		assert(stack.head > 0);
 
 		Empathy_MatchResult match_result = {0};
-		match_result.value = stack->data[stack->head - 1];
+		match_result.value = stack.data[stack.head - 1];
 		match_result.entry_point_index = i;
 
 		results[matched_count++] = match_result;
 	}
 
+	*result_count = matched_count;
 	return EMPATHY_SUCCESS;
 }
 
