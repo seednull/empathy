@@ -5,27 +5,58 @@ import {
     compileCanvas,
     EmpathyCanvasNodeKind,
     generateHeader,
+    NarrativeVariable,
 } from "./compile";
 import { EmpathyCanvasIntegration } from "./canvas";
+import {
+    EMPATHY_PANEL_VIEW,
+    EmpathyPanelView,
+} from "./variables";
 
 interface InternalCanvasView extends ItemView {
     canvas?: Canvas;
     file?: TFile;
 }
 
+interface EmpathyPluginData {
+    variables: NarrativeVariable[];
+}
+
 export default class EmpathyPlugin extends Plugin {
     private canvasIntegration!: EmpathyCanvasIntegration;
     private compiling = false;
+    private variables: NarrativeVariable[] = [];
+    private lastCanvasView?: InternalCanvasView;
 
-    onload(): void {
+    async onload(): Promise<void> {
+        const stored = await this.loadData() as EmpathyPluginData | null;
+        this.variables = stored?.variables ?? [];
+        this.registerView(EMPATHY_PANEL_VIEW, (leaf) => new EmpathyPanelView(leaf, {
+            getVariables: () => this.variables,
+            setVariables: (variables) => this.setVariables(variables),
+            getUsageCount: (name) => this.canvasIntegration.variableUsageCount(name),
+            compileActiveCanvas: () => this.compileActiveCanvas(),
+        }));
         this.canvasIntegration = new EmpathyCanvasIntegration(this, {
             setIcon,
             setTooltip: (element, tooltip) => setTooltip(element, tooltip, { placement: "top" }),
             showNotice: (message) => {
                 new Notice(message);
             },
+            getVariables: () => this.variables,
+            openPanel: (selectCreated) => void this.openPanel(selectCreated),
         });
         this.canvasIntegration.register();
+
+        this.rememberCanvas(this.app.workspace.activeLeaf?.view);
+        this.registerEvent(this.app.workspace.on("active-leaf-change", (leaf) => this.rememberCanvas(leaf?.view)));
+
+        this.addRibbonIcon("workflow", "Open Empathy panel", () => void this.openPanel());
+        this.addCommand({
+            id: "open-empathy-panel",
+            name: "Open Empathy panel",
+            callback: () => void this.openPanel(),
+        });
 
         this.addCommand({
             id: "compile-active-canvas",
@@ -47,9 +78,28 @@ export default class EmpathyPlugin extends Plugin {
         }
     }
 
+    onunload(): void {
+        this.app.workspace.detachLeavesOfType(EMPATHY_PANEL_VIEW);
+    }
+
     private activeCanvasView(): InternalCanvasView | undefined {
         const view = this.app.workspace.activeLeaf?.view as InternalCanvasView | undefined;
-        return view?.getViewType() === "canvas" ? view : undefined;
+        if (view?.getViewType() === "canvas") {
+            this.lastCanvasView = view;
+            return view;
+        }
+        const live = this.app.workspace.getLeavesOfType("canvas").map((leaf) => leaf.view as InternalCanvasView);
+        if (this.lastCanvasView && live.includes(this.lastCanvasView)) return this.lastCanvasView;
+        if (live.length === 1) {
+            this.lastCanvasView = live[0];
+            return live[0];
+        }
+        return undefined;
+    }
+
+    private rememberCanvas(view: unknown): void {
+        const candidate = view as InternalCanvasView | undefined;
+        if (candidate?.getViewType() === "canvas") this.lastCanvasView = candidate;
     }
 
     private createNode(canvas: Canvas, kind: EmpathyCanvasNodeKind): void {
@@ -60,6 +110,23 @@ export default class EmpathyPlugin extends Plugin {
             console.error("Empathy Canvas node creation failed", error);
             new Notice(`Empathy node creation failed: ${message}`);
         }
+    }
+
+    private async setVariables(variables: readonly NarrativeVariable[]): Promise<void> {
+        this.variables = [...variables];
+        await this.saveData({ variables: this.variables });
+        this.canvasIntegration.variablesChanged();
+        for (const leaf of this.app.workspace.getLeavesOfType(EMPATHY_PANEL_VIEW)) {
+            if (leaf.view instanceof EmpathyPanelView) leaf.view.refresh();
+        }
+    }
+
+    private async openPanel(selectCreated?: (variable: NarrativeVariable) => void): Promise<void> {
+        const leaf = await this.app.workspace.ensureSideLeaf(EMPATHY_PANEL_VIEW, "right", {
+            active: true,
+            reveal: true,
+        });
+        if (leaf.view instanceof EmpathyPanelView && selectCreated) leaf.view.startCreating(selectCreated);
     }
 
     private async compileActiveCanvas(): Promise<void> {
@@ -80,7 +147,7 @@ export default class EmpathyPlugin extends Plugin {
                 throw new Error("active Canvas is not backed by a .canvas file");
             }
 
-            const result = compileCanvas(view.canvas);
+            const result = compileCanvas(view.canvas, this.variables);
             const outputBase = file.path.slice(0, -(file.extension.length + 1));
             const binaryPath = `${outputBase}.empathy.bin`;
             const headerPath = `${outputBase}.empathy.h`;

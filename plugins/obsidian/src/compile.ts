@@ -12,6 +12,10 @@ export interface CanvasNodeData {
     text?: string;
     empathyKind?: string;
     empathyCharacter?: string;
+    empathyAssignments?: NarrativeAssignment[];
+    empathyEntryCondition?: NarrativeCondition;
+    empathyEntryMatchValue?: string;
+    empathyChoices?: string[];
     [key: string]: unknown;
 }
 
@@ -20,15 +24,21 @@ export interface CanvasNode {
     getData(): CanvasNodeData;
 }
 
-export interface CanvasEdge {
+export interface CanvasEdgeData {
     id?: string;
     label?: string;
+    empathyCondition?: NarrativeCondition;
+    empathyElse?: boolean;
+    empathyConditionOrder?: number;
+    empathyChoiceIndex?: number;
+    [key: string]: unknown;
+}
+
+export interface CanvasEdge {
+    id?: string;
     from?: { node?: CanvasNode };
     to?: { node?: CanvasNode };
-    getData(): {
-        id?: string;
-        label?: string;
-    };
+    getData(): CanvasEdgeData;
 }
 
 export interface Canvas {
@@ -42,15 +52,77 @@ export const EmpathyCanvasNodeKind = {
     SAY: "say",
     LINE: "line",
     CHOICE: "choice",
+    SET: "set",
     END: "end",
 } as const;
 
 export type EmpathyCanvasNodeKind = typeof EmpathyCanvasNodeKind[keyof typeof EmpathyCanvasNodeKind];
 
-export function getEmpathyCanvasNodeKind(data: CanvasNodeData): EmpathyCanvasNodeKind | undefined {
-    if (data.type !== "text") return undefined;
-    const value = data.empathyKind;
-    return Object.values(EmpathyCanvasNodeKind).find((kind) => kind === value);
+export const NarrativeVariableType = {
+    BOOLEAN: "boolean",
+    INTEGER: "integer",
+    FLOAT: "float",
+} as const;
+
+export type NarrativeVariableType = typeof NarrativeVariableType[keyof typeof NarrativeVariableType];
+
+export const NarrativeVariableAccess = {
+    READ: "read",
+    WRITE: "write",
+    READ_WRITE: "read-write",
+} as const;
+
+export type NarrativeVariableAccess = typeof NarrativeVariableAccess[keyof typeof NarrativeVariableAccess];
+
+export interface NarrativeVariable {
+    name: string;
+    type: NarrativeVariableType;
+    access: NarrativeVariableAccess;
+}
+
+export type NarrativeComparison = "==" | "!=" | "<" | "<=" | ">" | ">=";
+
+export interface NarrativeCondition {
+    variable: string;
+    comparison: NarrativeComparison;
+    literal: string;
+}
+
+export interface NarrativeAssignment {
+    variable: string;
+    operation: string;
+    literal: string;
+}
+
+export interface ParsedVariableName {
+    tableName: string;
+    variableName: string;
+}
+
+export interface CanvasIssue {
+    message: string;
+    nodeId?: string;
+    edgeId?: string;
+}
+
+interface CompiledParameter extends NarrativeVariable, ParsedVariableName {
+    parameterIndex: number;
+    tableIndex: number;
+}
+
+export interface CompileResult {
+    bytecode: Uint8Array;
+    entryPoints: ReadonlyArray<{
+        executionOffset: number;
+        predicateOffset?: number;
+        name: string;
+    }>;
+    lines: readonly string[];
+    characters: readonly string[];
+    choices: readonly string[];
+    nodeOffsets: ReadonlyMap<string, number>;
+    tables: ReadonlyArray<{ name: string; index: number }>;
+    parameters: ReadonlyArray<CompiledParameter>;
 }
 
 const EmpathyPocAtomType = {
@@ -73,6 +145,7 @@ interface JumpPatch {
 interface CompileState {
     canvas: Canvas;
     writer: BytecodeWriter;
+    parameters: Map<string, CompiledParameter>;
     nodeOffsets: Map<string, number>;
     patches: JumpPatch[];
     queue: CanvasNode[];
@@ -84,17 +157,21 @@ interface CompileState {
     choices: string[];
 }
 
-export interface CompileResult {
-    bytecode: Uint8Array;
-    entryPoints: ReadonlyArray<{ executionOffset: number }>;
-    lines: readonly string[];
-    characters: readonly string[];
-    choices: readonly string[];
-    nodeOffsets: ReadonlyMap<string, number>;
-}
-
 function stableCompare(left: string, right: string): number {
     return left < right ? -1 : left > right ? 1 : 0;
+}
+
+export function parseVariableName(name: string): ParsedVariableName | undefined {
+    if (typeof name !== "string" || name !== name.trim()) return undefined;
+    const parts = name.split(".");
+    if (parts.length !== 2 || parts[0].length === 0 || parts[1].length === 0) return undefined;
+    return { tableName: parts[0], variableName: parts[1] };
+}
+
+export function getEmpathyCanvasNodeKind(data: CanvasNodeData): EmpathyCanvasNodeKind | undefined {
+    if (data.type !== "text") return undefined;
+    const value = data.empathyKind;
+    return Object.values(EmpathyCanvasNodeKind).find((kind) => kind === value);
 }
 
 function nodeId(node: CanvasNode): string {
@@ -116,69 +193,391 @@ function edgeId(edge: CanvasEdge): string {
 function normalizedNodeText(node: CanvasNode): string {
     const data = node.getData();
     const id = nodeId(node);
-    if (data.type !== "text") {
-        throw new Error(`Unknown node type at ${id}: expected a Canvas text node`);
-    }
-    if (typeof data.text !== "string") {
+    if (data.type !== "text" || typeof data.text !== "string") {
         throw new Error(`Unknown node type at ${id}: expected a Canvas text node`);
     }
     return data.text.replace(/\r\n?/g, "\n").trim();
-}
-
-function empathyNodeKind(node: CanvasNode): EmpathyCanvasNodeKind | undefined {
-    const data = node.getData();
-    const kind = getEmpathyCanvasNodeKind(data);
-    if (data.empathyKind !== undefined && kind === undefined) {
-        throw new Error(`Unknown Empathy node type at ${nodeId(node)}: ${String(data.empathyKind)}`);
-    }
-    return kind;
 }
 
 function outgoingEdges(canvas: Canvas, node: CanvasNode): CanvasEdge[] {
     const id = nodeId(node);
     return Array.from(canvas.edges.values()).filter((edge) => {
         const from = edge.from?.node;
-        if (from === node) {
-            return true;
-        }
-        if (!from) {
-            return false;
-        }
-        const fromId = from.id ?? from.getData().id;
-        return fromId === id;
+        if (from === node) return true;
+        if (!from) return false;
+        return (from.id ?? from.getData().id) === id;
     });
 }
 
-function targetNode(state: CompileState, edge: CanvasEdge, sourceNode: CanvasNode): CanvasNode {
+function targetNode(canvas: Canvas, edge: CanvasEdge, sourceNode: CanvasNode): CanvasNode {
     const target = edge.to?.node;
-    const sourceId = nodeId(sourceNode);
     if (!target) {
-        throw new Error(`Unresolved target on edge ${edgeId(edge)} from node ${sourceId}`);
+        throw new Error(`Unresolved target on edge ${edgeId(edge)} from node ${nodeId(sourceNode)}`);
     }
-
     const targetId = nodeId(target);
-    const canvasTarget = state.canvas.nodes.get(targetId);
+    const canvasTarget = canvas.nodes.get(targetId);
     if (!canvasTarget) {
-        throw new Error(`Unresolved target ${targetId} from node ${sourceId}`);
+        throw new Error(`Unresolved target ${targetId} from node ${nodeId(sourceNode)}`);
     }
     return canvasTarget;
 }
 
-function queueTarget(state: CompileState, edge: CanvasEdge, sourceNode: CanvasNode): CanvasNode {
-    const target = targetNode(state, edge, sourceNode);
-    state.queue.push(target);
-    return target;
+function isReadable(variable: NarrativeVariable): boolean {
+    return variable.access === NarrativeVariableAccess.READ ||
+        variable.access === NarrativeVariableAccess.READ_WRITE;
+}
+
+function isWritable(variable: NarrativeVariable): boolean {
+    return variable.access === NarrativeVariableAccess.WRITE ||
+        variable.access === NarrativeVariableAccess.READ_WRITE;
+}
+
+function parsedLiteral(variable: NarrativeVariable, literal: unknown): boolean | number | undefined {
+    if (typeof literal !== "string") return undefined;
+    if (variable.type === NarrativeVariableType.BOOLEAN) {
+        if (literal === "true") return true;
+        if (literal === "false") return false;
+        return undefined;
+    }
+    if (variable.type === NarrativeVariableType.INTEGER) {
+        if (!/^[+-]?\d+$/.test(literal)) return undefined;
+        const value = Number(literal);
+        return Number.isSafeInteger(value) && value >= -0x80000000 && value <= 0x7FFFFFFF
+            ? value
+            : undefined;
+    }
+    const value = literal.trim().length > 0 ? Number(literal) : Number.NaN;
+    return Number.isFinite(value) && Number.isFinite(Math.fround(value)) ? value : undefined;
+}
+
+function isCondition(value: unknown): value is NarrativeCondition {
+    if (!value || typeof value !== "object") return false;
+    const condition = value as Partial<NarrativeCondition>;
+    return typeof condition.variable === "string" &&
+        typeof condition.comparison === "string" &&
+        typeof condition.literal === "string";
+}
+
+function issueForNode(issues: CanvasIssue[], node: CanvasNode, message: string): void {
+    let id: string | undefined;
+    try { id = nodeId(node); } catch { /* the message below remains useful */ }
+    issues.push({ nodeId: id, message });
+}
+
+function issueForEdge(issues: CanvasIssue[], edge: CanvasEdge, message: string): void {
+    let id: string | undefined;
+    try { id = edgeId(edge); } catch { /* the message below remains useful */ }
+    issues.push({ edgeId: id, message });
+}
+
+function validateCondition(
+    condition: unknown,
+    variables: ReadonlyMap<string, NarrativeVariable>,
+    issues: CanvasIssue[],
+    location: CanvasNode | CanvasEdge,
+): void {
+    const report = (message: string): void => {
+        if ("from" in location) issueForEdge(issues, location, message);
+        else issueForNode(issues, location, message);
+    };
+    if (!isCondition(condition)) {
+        report("Condition is incomplete; select a variable, comparison, and literal");
+        return;
+    }
+    const variable = variables.get(condition.variable);
+    if (!variable) {
+        report(`Variable ${condition.variable || "(not selected)"} is missing`);
+        return;
+    }
+    if (!isReadable(variable)) {
+        report(`Variable ${variable.name} is write-only and cannot be used in a condition`);
+    }
+    const numericComparisons: readonly NarrativeComparison[] = ["==", "!=", "<", "<=", ">", ">="];
+    const allowed = variable.type === NarrativeVariableType.BOOLEAN
+        ? condition.comparison === "=="
+        : numericComparisons.includes(condition.comparison as NarrativeComparison);
+    if (!allowed) report(`Comparison ${condition.comparison} is not valid for ${variable.type} ${variable.name}`);
+    if (parsedLiteral(variable, condition.literal) === undefined) {
+        report(`Literal ${JSON.stringify(condition.literal)} is not a valid ${variable.type} value for ${variable.name}`);
+    }
+}
+
+function validateVariableConfiguration(variables: readonly NarrativeVariable[]): CanvasIssue[] {
+    const issues: CanvasIssue[] = [];
+    const names = new Set<string>();
+    for (let index = 0; index < variables.length; ++index) {
+        const variable = variables[index];
+        if (!parseVariableName(variable.name)) {
+            issues.push({ message: `Variable ${index + 1} must use exactly table.variable with two non-empty parts` });
+        }
+        if (names.has(variable.name)) issues.push({ message: `Variable name ${variable.name} is duplicated` });
+        names.add(variable.name);
+        if (!Object.values(NarrativeVariableType).includes(variable.type)) {
+            issues.push({ message: `Variable ${variable.name} has unsupported type ${String(variable.type)}` });
+        }
+        if (!Object.values(NarrativeVariableAccess).includes(variable.access)) {
+            issues.push({ message: `Variable ${variable.name} has unsupported access ${String(variable.access)}` });
+        }
+    }
+    return issues;
+}
+
+function validTarget(
+    canvas: Canvas,
+    edge: CanvasEdge,
+    source: CanvasNode,
+    issues: CanvasIssue[],
+): CanvasNode | undefined {
+    try {
+        return targetNode(canvas, edge, source);
+    } catch (error) {
+        issueForEdge(issues, edge, error instanceof Error ? error.message : String(error));
+        return undefined;
+    }
+}
+
+function validateOrderedConditionalEdges(
+    canvas: Canvas,
+    source: CanvasNode,
+    edges: CanvasEdge[],
+    variables: ReadonlyMap<string, NarrativeVariable>,
+    issues: CanvasIssue[],
+    queue: CanvasNode[],
+): void {
+    const orders = new Set<number>();
+    let elseCount = 0;
+    for (const edge of edges) {
+        const data = edge.getData();
+        if (!data.empathyElse && data.empathyCondition === undefined) {
+            issueForEdge(issues, edge, "Every edge in a conditional fan-out must have a condition or be else");
+        }
+        if (data.empathyElse) {
+            ++elseCount;
+            if (data.empathyCondition !== undefined) {
+                issueForEdge(issues, edge, "An else edge cannot also have a condition");
+            }
+            if (data.empathyConditionOrder !== undefined) {
+                issueForEdge(issues, edge, "An else edge cannot have an evaluation order");
+            }
+        } else {
+            if (!Number.isInteger(data.empathyConditionOrder) || (data.empathyConditionOrder ?? -1) < 0) {
+                issueForEdge(issues, edge, "Conditional edge is missing a non-negative authored order");
+            } else {
+                const order = data.empathyConditionOrder!;
+                if (orders.has(order)) issueForEdge(issues, edge, `Conditional edge order ${order} is duplicated`);
+                orders.add(order);
+            }
+            validateCondition(data.empathyCondition, variables, issues, edge);
+        }
+        const target = validTarget(canvas, edge, source, issues);
+        if (target) queue.push(target);
+    }
+    if (elseCount > 1) issueForNode(issues, source, "Conditional fan-out has more than one else edge");
+}
+
+function validateContinuation(
+    canvas: Canvas,
+    node: CanvasNode,
+    kind: string,
+    variables: ReadonlyMap<string, NarrativeVariable>,
+    issues: CanvasIssue[],
+    queue: CanvasNode[],
+): void {
+    const edges = outgoingEdges(canvas, node);
+    if (edges.length === 0) {
+        issueForNode(issues, node, `${kind} node must have at least one outgoing continuation`);
+        return;
+    }
+    const normal = edges.filter((edge) => !edge.getData().empathyElse && edge.getData().empathyCondition === undefined);
+    if (edges.length === 1 && normal.length === 1) {
+        const target = validTarget(canvas, edges[0], node, issues);
+        if (target) queue.push(target);
+        return;
+    }
+    if (normal.length > 0) {
+        issueForNode(issues, node, `${kind} fan-out mixes unconditional and conditional edges`);
+    }
+    validateOrderedConditionalEdges(canvas, node, edges, variables, issues, queue);
+}
+
+export function validateCanvas(canvas: Canvas, variables: readonly NarrativeVariable[] = []): CanvasIssue[] {
+    const issues = validateVariableConfiguration(variables);
+    if (!(canvas?.nodes instanceof Map) || !(canvas?.edges instanceof Map)) {
+        return [...issues, { message: "Active Canvas runtime does not expose nodes and edges maps" }];
+    }
+    const variableMap = new Map(variables.map((variable) => [variable.name, variable]));
+    const entries = Array.from(canvas.nodes.values())
+        .filter((node) => getEmpathyCanvasNodeKind(node.getData()) === EmpathyCanvasNodeKind.ENTRY)
+        .sort((left, right) => stableCompare(nodeId(left), nodeId(right)));
+    if (entries.length === 0) return [...issues, { message: "Canvas contains no ENTRY node" }];
+
+    const queue: CanvasNode[] = [];
+    for (const entry of entries) {
+        const data = entry.getData();
+        if (typeof data.text !== "string" || data.text.trim().length === 0) {
+            issueForNode(issues, entry, "ENTRY requires a non-empty name");
+        }
+        const edges = outgoingEdges(canvas, entry);
+        if (edges.length !== 1) {
+            issueForNode(issues, entry, `ENTRY node must have exactly one outgoing edge; found ${edges.length}`);
+        } else {
+            const edgeData = edges[0].getData();
+            if (edgeData.empathyCondition !== undefined || edgeData.empathyElse) {
+                issueForEdge(issues, edges[0], "ENTRY continuation must be a normal, unconditional edge");
+            }
+            const target = validTarget(canvas, edges[0], entry, issues);
+            if (target) queue.push(target);
+        }
+        if (data.empathyEntryCondition !== undefined) {
+            validateCondition(data.empathyEntryCondition, variableMap, issues, entry);
+            const match = Number(data.empathyEntryMatchValue);
+            if (!Number.isInteger(match) || match < 0 || match > 0xFFFFFFFF) {
+                issueForNode(issues, entry, "ENTRY predicate requires a UINT32 match value");
+            }
+        } else if (data.empathyEntryMatchValue !== undefined && data.empathyEntryMatchValue !== "") {
+            issueForNode(issues, entry, "ENTRY match value requires an availability predicate");
+        }
+    }
+
+    const visited = new Set<string>();
+    for (let index = 0; index < queue.length; ++index) {
+        const node = queue[index];
+        let id: string;
+        try { id = nodeId(node); } catch (error) {
+            issues.push({ message: error instanceof Error ? error.message : String(error) });
+            continue;
+        }
+        if (visited.has(id)) continue;
+        visited.add(id);
+        const data = node.getData();
+        const kind = getEmpathyCanvasNodeKind(data);
+        if (!kind) {
+            issueForNode(issues, node, `Unsupported semantic node reached from ENTRY at ${id}; expected empathyKind metadata`);
+            continue;
+        }
+        if (kind === EmpathyCanvasNodeKind.ENTRY) {
+            issueForNode(issues, node, "An ENTRY node cannot be reached as an executable continuation");
+            continue;
+        }
+        if (kind === EmpathyCanvasNodeKind.SAY) {
+            if (typeof data.empathyCharacter !== "string" || data.empathyCharacter.trim().length === 0 ||
+                typeof data.text !== "string" || data.text.trim().length === 0) {
+                issueForNode(issues, node, "SAY requires a non-empty character and dialogue");
+            }
+            validateContinuation(canvas, node, "SAY", variableMap, issues, queue);
+        } else if (kind === EmpathyCanvasNodeKind.LINE) {
+            if (typeof data.text !== "string" || data.text.trim().length === 0) {
+                issueForNode(issues, node, "LINE requires non-empty text");
+            }
+            validateContinuation(canvas, node, "LINE", variableMap, issues, queue);
+        } else if (kind === EmpathyCanvasNodeKind.SET) {
+            const assignments = Array.isArray(data.empathyAssignments) ? data.empathyAssignments : [];
+            if (assignments.length === 0) issueForNode(issues, node, "SET must define at least one assignment");
+            assignments.forEach((assignment, assignmentIndex) => {
+                if (!assignment || typeof assignment !== "object") {
+                    issueForNode(issues, node, `SET assignment ${assignmentIndex} is malformed`);
+                    return;
+                }
+                const variable = typeof assignment.variable === "string"
+                    ? variableMap.get(assignment.variable)
+                    : undefined;
+                if (!variable) {
+                    issueForNode(issues, node, `SET assignment ${assignmentIndex}: variable ${String(assignment.variable || "(not selected)")} is missing`);
+                    return;
+                }
+                if (!isWritable(variable)) {
+                    issueForNode(issues, node, `SET assignment ${assignmentIndex}: variable ${variable.name} is read-only and cannot be assigned`);
+                }
+                const operations = variable.type === NarrativeVariableType.BOOLEAN ? ["="] : ["=", "+=", "-="];
+                if (!operations.includes(String(assignment.operation))) {
+                    issueForNode(issues, node, `SET assignment ${assignmentIndex}: operation ${String(assignment.operation)} is not valid for ${variable.type} ${variable.name}`);
+                }
+                if (parsedLiteral(variable, assignment.literal) === undefined) {
+                    issueForNode(issues, node, `SET assignment ${assignmentIndex}: literal ${JSON.stringify(assignment.literal)} is not valid for ${variable.type} ${variable.name}`);
+                }
+            });
+            const edges = outgoingEdges(canvas, node);
+            if (edges.length !== 1) {
+                issueForNode(issues, node, `SET node must have exactly one outgoing edge; found ${edges.length}`);
+            } else {
+                const edgeData = edges[0].getData();
+                if (edgeData.empathyCondition !== undefined || edgeData.empathyElse) {
+                    issueForEdge(issues, edges[0], "SET continuation must be a normal, unconditional edge");
+                }
+                const target = validTarget(canvas, edges[0], node, issues);
+                if (target) queue.push(target);
+            }
+        } else if (kind === EmpathyCanvasNodeKind.CHOICE) {
+            const edges = outgoingEdges(canvas, node);
+            const choices = Array.isArray(data.empathyChoices) ? data.empathyChoices : [];
+            if (choices.length === 0) issueForNode(issues, node, "CHOICE must define at least one option");
+            choices.forEach((choice, choiceIndex) => {
+                if (typeof choice !== "string" || choice.trim().length === 0) {
+                    issueForNode(issues, node, `CHOICE option ${choiceIndex} requires non-empty text`);
+                }
+            });
+            if (edges.length !== choices.length) {
+                issueForNode(issues, node, `CHOICE must have exactly one edge per option; found ${choices.length} options and ${edges.length} edges`);
+            }
+            const orders = new Set<number>();
+            for (const edge of edges) {
+                const edgeData = edge.getData();
+                if (!Number.isInteger(edgeData.empathyChoiceIndex) || (edgeData.empathyChoiceIndex ?? -1) < 0) {
+                    issueForEdge(issues, edge, "CHOICE edge is not linked to an option");
+                } else if (edgeData.empathyChoiceIndex! >= choices.length) {
+                    issueForEdge(issues, edge, `CHOICE edge references missing option ${edgeData.empathyChoiceIndex}`);
+                } else if (orders.has(edgeData.empathyChoiceIndex!)) {
+                    issueForEdge(issues, edge, `CHOICE option ${edgeData.empathyChoiceIndex} is linked more than once`);
+                } else orders.add(edgeData.empathyChoiceIndex!);
+                if (edgeData.empathyCondition !== undefined || edgeData.empathyElse) {
+                    issueForEdge(issues, edge, "CHOICE option edges cannot also be conditional transitions");
+                }
+                const target = validTarget(canvas, edge, node, issues);
+                if (target) queue.push(target);
+            }
+            if (orders.size !== choices.length && edges.length === choices.length) {
+                issueForNode(issues, node, "Every CHOICE option must be linked to exactly one edge");
+            }
+        } else if (kind === EmpathyCanvasNodeKind.END) {
+            const edges = outgoingEdges(canvas, node);
+            if (edges.length !== 0) issueForNode(issues, node, `END node must not have outgoing edges; found ${edges.length}`);
+        }
+    }
+    return issues;
+}
+
+function deriveParameters(variables: readonly NarrativeVariable[]): {
+    tables: Array<{ name: string; index: number }>;
+    parameters: CompiledParameter[];
+} {
+    const tableIndices = new Map<string, number>();
+    const tables: Array<{ name: string; index: number }> = [];
+    const parameters = variables.map((variable, parameterIndex): CompiledParameter => {
+        const parsed = parseVariableName(variable.name)!;
+        let tableIndex = tableIndices.get(parsed.tableName);
+        if (tableIndex === undefined) {
+            tableIndex = tables.length;
+            tableIndices.set(parsed.tableName, tableIndex);
+            tables.push({ name: parsed.tableName, index: tableIndex });
+        }
+        return { ...variable, ...parsed, parameterIndex, tableIndex };
+    });
+    return { tables, parameters };
 }
 
 function internAtom(value: string, values: string[], ids: Map<string, number>): number {
     const existing = ids.get(value);
-    if (existing !== undefined) {
-        return existing;
-    }
+    if (existing !== undefined) return existing;
     const id = values.length;
     values.push(value);
     ids.set(value, id);
     return id;
+}
+
+function queueTarget(state: CompileState, edge: CanvasEdge, source: CanvasNode): CanvasNode {
+    const target = targetNode(state.canvas, edge, source);
+    state.queue.push(target);
+    return target;
 }
 
 function emitJump(state: CompileState, target: CanvasNode): void {
@@ -188,85 +587,123 @@ function emitJump(state: CompileState, target: CanvasNode): void {
     state.patches.push({ operandOffset, targetNodeId: nodeId(target) });
 }
 
-function requireSingleOutgoing(state: CompileState, node: CanvasNode, kind: string): CanvasEdge {
-    const outgoing = outgoingEdges(state.canvas, node);
-    if (outgoing.length !== 1) {
-        throw new Error(`${kind} node ${nodeId(node)} must have exactly one outgoing edge; found ${outgoing.length}`);
+function emitLiteral(writer: BytecodeWriter, variable: NarrativeVariable, literal: string): void {
+    const value = parsedLiteral(variable, literal)!;
+    if (variable.type === NarrativeVariableType.BOOLEAN) {
+        writer.opcode(EmpathyBytecodeOpcode.PUSH_U8);
+        writer.u8(value ? 1 : 0);
+    } else if (variable.type === NarrativeVariableType.INTEGER) {
+        writer.opcode(EmpathyBytecodeOpcode.PUSH_I32);
+        writer.i32(value as number);
+    } else {
+        writer.opcode(EmpathyBytecodeOpcode.PUSH_F32);
+        writer.f32(value as number);
     }
-    return outgoing[0];
 }
 
-function compileEntry(state: CompileState, node: CanvasNode): CanvasNode {
-    normalizedNodeText(node);
-    const edge = requireSingleOutgoing(state, node, "ENTRY");
-    return queueTarget(state, edge, node);
+function emitCondition(state: CompileState, condition: NarrativeCondition): void {
+    const parameter = state.parameters.get(condition.variable)!;
+    state.writer.opcode(EmpathyBytecodeOpcode.LOAD);
+    state.writer.u32(parameter.parameterIndex);
+    emitLiteral(state.writer, parameter, condition.literal);
+    const opcodes: Record<NarrativeComparison, number> = {
+        "==": EmpathyBytecodeOpcode.EQUAL,
+        "!=": EmpathyBytecodeOpcode.NOT_EQUAL,
+        "<": EmpathyBytecodeOpcode.LESS,
+        "<=": EmpathyBytecodeOpcode.LESS_EQUAL,
+        ">": EmpathyBytecodeOpcode.GREATER,
+        ">=": EmpathyBytecodeOpcode.GREATER_EQUAL,
+    };
+    state.writer.opcode(opcodes[condition.comparison]);
+}
+
+function emitTransitions(state: CompileState, node: CanvasNode): void {
+    const edges = outgoingEdges(state.canvas, node);
+    const onlyData = edges[0]?.getData();
+    if (edges.length === 1 && onlyData.empathyCondition === undefined && !onlyData.empathyElse) {
+        emitJump(state, queueTarget(state, edges[0], node));
+        return;
+    }
+    edges.sort((left, right) => {
+        if (left.getData().empathyElse) return right.getData().empathyElse ? 0 : 1;
+        if (right.getData().empathyElse) return -1;
+        return left.getData().empathyConditionOrder! - right.getData().empathyConditionOrder!;
+    });
+    for (const edge of edges) {
+        const data = edge.getData();
+        const target = queueTarget(state, edge, node);
+        if (data.empathyElse) {
+            emitJump(state, target);
+            return;
+        }
+        emitCondition(state, data.empathyCondition!);
+        state.writer.opcode(EmpathyBytecodeOpcode.JUMP_FALSE);
+        const nextOffset = state.writer.offset;
+        state.writer.u64(0n);
+        emitJump(state, target);
+        state.writer.patchU64(nextOffset, state.writer.offset);
+    }
+    state.writer.opcode(EmpathyBytecodeOpcode.END);
 }
 
 function compileSay(state: CompileState, node: CanvasNode): void {
     const data = node.getData();
-    const character = typeof data.empathyCharacter === "string" ? data.empathyCharacter.trim() : "";
     const line = normalizedNodeText(node);
-    if (character.length === 0 || line.length === 0) {
-        throw new Error(`SAY node ${nodeId(node)} is malformed; expected a non-empty character field and dialogue text`);
-    }
-
-    const edge = requireSingleOutgoing(state, node, "SAY");
+    const character = (data.empathyCharacter as string).trim();
     const lineId = internAtom(line, state.lines, state.lineIds);
     const characterId = internAtom(character, state.characters, state.characterIds);
-
     state.writer.opcode(EmpathyBytecodeOpcode.YIELD_PUSH_ATOM);
     state.writer.atom(EmpathyPocAtomType.LINE, lineId);
     state.writer.opcode(EmpathyBytecodeOpcode.YIELD_PUSH_ATOM);
     state.writer.atom(EmpathyPocAtomType.CHARACTER, characterId);
     state.writer.opcode(EmpathyBytecodeOpcode.YIELD);
     state.writer.u32(EmpathyPocYieldType.SAY);
-    emitJump(state, queueTarget(state, edge, node));
+    emitTransitions(state, node);
 }
 
 function compileLine(state: CompileState, node: CanvasNode): void {
-    const line = normalizedNodeText(node);
-    if (line.length === 0) {
-        throw new Error(`LINE node ${nodeId(node)} is malformed; expected line text`);
-    }
-
-    const edge = requireSingleOutgoing(state, node, "LINE");
-    const lineId = internAtom(line, state.lines, state.lineIds);
-
+    const lineId = internAtom(normalizedNodeText(node), state.lines, state.lineIds);
     state.writer.opcode(EmpathyBytecodeOpcode.YIELD_PUSH_ATOM);
     state.writer.atom(EmpathyPocAtomType.LINE, lineId);
     state.writer.opcode(EmpathyBytecodeOpcode.YIELD);
     state.writer.u32(EmpathyPocYieldType.LINE);
+    emitTransitions(state, node);
+}
+
+function compileSet(state: CompileState, node: CanvasNode): void {
+    for (const assignment of node.getData().empathyAssignments!) {
+        const parameter = state.parameters.get(assignment.variable)!;
+        if (assignment.operation !== "=") {
+            state.writer.opcode(EmpathyBytecodeOpcode.LOAD);
+            state.writer.u32(parameter.parameterIndex);
+        }
+        emitLiteral(state.writer, parameter, assignment.literal);
+        if (assignment.operation === "+=") state.writer.opcode(EmpathyBytecodeOpcode.ADD);
+        else if (assignment.operation === "-=") state.writer.opcode(EmpathyBytecodeOpcode.SUB);
+        state.writer.opcode(EmpathyBytecodeOpcode.STORE);
+        state.writer.u32(parameter.parameterIndex);
+    }
+    const edge = outgoingEdges(state.canvas, node)[0];
     emitJump(state, queueTarget(state, edge, node));
 }
 
 function compileChoice(state: CompileState, node: CanvasNode): void {
-    normalizedNodeText(node);
-
-    const outgoing = outgoingEdges(state.canvas, node);
-    if (outgoing.length === 0) {
-        throw new Error(`CHOICE node ${nodeId(node)} must have at least one outgoing edge`);
-    }
-    outgoing.sort((left, right) => stableCompare(edgeId(left), edgeId(right)));
-
+    const choices = node.getData().empathyChoices!;
+    const edges = outgoingEdges(state.canvas, node)
+        .sort((left, right) => left.getData().empathyChoiceIndex! - right.getData().empathyChoiceIndex!);
     const targets: CanvasNode[] = [];
-    for (const edge of outgoing) {
-        const label = edge.getData().label ?? edge.label;
-        if (typeof label !== "string" || label.trim().length === 0) {
-            throw new Error(`CHOICE edge ${edgeId(edge)} from node ${nodeId(node)} is missing a label`);
-        }
-        const choiceId = internAtom(label.trim(), state.choices, state.choiceIds);
+    for (const edge of edges) {
+        const choice = choices[edge.getData().empathyChoiceIndex!]!.trim();
+        const choiceId = internAtom(choice, state.choices, state.choiceIds);
         state.writer.opcode(EmpathyBytecodeOpcode.YIELD_PUSH_ATOM);
         state.writer.atom(EmpathyPocAtomType.CHOICE, choiceId);
         targets.push(queueTarget(state, edge, node));
     }
-
     state.writer.opcode(EmpathyBytecodeOpcode.YIELD_PUSH_U32);
-    state.writer.u32(outgoing.length);
+    state.writer.u32(edges.length);
     state.writer.opcode(EmpathyBytecodeOpcode.YIELD);
     state.writer.u32(EmpathyPocYieldType.CHOICE);
     state.writer.opcode(EmpathyBytecodeOpcode.YIELD_TAKE);
-
-    // Keep the selected index for subsequent comparisons, but drop it before every branch.
     for (let choiceIndex = 0; choiceIndex + 1 < targets.length; ++choiceIndex) {
         state.writer.opcode(EmpathyBytecodeOpcode.DUP);
         state.writer.opcode(EmpathyBytecodeOpcode.PUSH_U32);
@@ -279,57 +716,41 @@ function compileChoice(state: CompileState, node: CanvasNode): void {
         emitJump(state, targets[choiceIndex]);
         state.writer.patchU64(nextComparisonOffset, state.writer.offset);
     }
-
     state.writer.opcode(EmpathyBytecodeOpcode.DROP);
     emitJump(state, targets[targets.length - 1]);
 }
 
-function compileEnd(state: CompileState, node: CanvasNode): void {
-    normalizedNodeText(node);
-    const outgoing = outgoingEdges(state.canvas, node);
-    if (outgoing.length !== 0) {
-        throw new Error(`END node ${nodeId(node)} must not have outgoing edges; found ${outgoing.length}`);
-    }
-    state.writer.opcode(EmpathyBytecodeOpcode.END);
-}
-
 function compileNode(state: CompileState, node: CanvasNode): void {
-    const kind = empathyNodeKind(node);
-    switch (kind) {
-        case EmpathyCanvasNodeKind.SAY:
-            compileSay(state, node);
-            return;
-        case EmpathyCanvasNodeKind.LINE:
-            compileLine(state, node);
-            return;
-        case EmpathyCanvasNodeKind.CHOICE:
-            compileChoice(state, node);
-            return;
-        case EmpathyCanvasNodeKind.END:
-            compileEnd(state, node);
-            return;
-        case EmpathyCanvasNodeKind.ENTRY:
-            throw new Error(`Graph node ${nodeId(node)} reached in an unsupported state: ENTRY`);
-        default:
-            throw new Error(`Unknown Empathy node type at ${nodeId(node)}: expected empathyKind metadata`);
+    switch (getEmpathyCanvasNodeKind(node.getData())) {
+        case EmpathyCanvasNodeKind.SAY: compileSay(state, node); return;
+        case EmpathyCanvasNodeKind.LINE: compileLine(state, node); return;
+        case EmpathyCanvasNodeKind.SET: compileSet(state, node); return;
+        case EmpathyCanvasNodeKind.CHOICE: compileChoice(state, node); return;
+        case EmpathyCanvasNodeKind.END: state.writer.opcode(EmpathyBytecodeOpcode.END); return;
+        default: throw new Error(`Unsupported semantic node ${nodeId(node)}`);
     }
 }
 
-export function compileCanvas(canvas: Canvas): CompileResult {
-    if (!(canvas?.nodes instanceof Map) || !(canvas?.edges instanceof Map)) {
-        throw new Error("Active Canvas runtime does not expose nodes and edges maps");
+class CanvasValidationError extends Error {
+    constructor(readonly issues: readonly CanvasIssue[]) {
+        super(issues.length === 1
+            ? issues[0].message
+            : `${issues[0].message} (${issues.length - 1} more validation error${issues.length === 2 ? "" : "s"})`);
+        this.name = "CanvasValidationError";
     }
+}
 
+export function compileCanvas(canvas: Canvas, variables: readonly NarrativeVariable[] = []): CompileResult {
+    const issues = validateCanvas(canvas, variables);
+    if (issues.length > 0) throw new CanvasValidationError(issues);
+    const { tables, parameters } = deriveParameters(variables);
     const entries = Array.from(canvas.nodes.values())
         .filter((node) => getEmpathyCanvasNodeKind(node.getData()) === EmpathyCanvasNodeKind.ENTRY)
         .sort((left, right) => stableCompare(nodeId(left), nodeId(right)));
-    if (entries.length === 0) {
-        throw new Error("Canvas contains no ENTRY node");
-    }
-
     const state: CompileState = {
         canvas,
         writer: new BytecodeWriter(),
+        parameters: new Map(parameters.map((parameter) => [parameter.name, parameter])),
         nodeOffsets: new Map(),
         patches: [],
         queue: [],
@@ -340,34 +761,31 @@ export function compileCanvas(canvas: Canvas): CompileResult {
         characters: [],
         choices: [],
     };
-
-    const entryTargets = entries.map((entry) => compileEntry(state, entry));
+    const entryTargets = entries.map((entry) => queueTarget(state, outgoingEdges(canvas, entry)[0], entry));
     for (let queueIndex = 0; queueIndex < state.queue.length; ++queueIndex) {
         const node = state.queue[queueIndex];
         const id = nodeId(node);
-        if (state.nodeOffsets.has(id)) {
-            continue;
-        }
+        if (state.nodeOffsets.has(id)) continue;
         state.nodeOffsets.set(id, state.writer.offset);
         compileNode(state, node);
     }
-
-    for (const patch of state.patches) {
-        const targetOffset = state.nodeOffsets.get(patch.targetNodeId);
-        if (targetOffset === undefined) {
-            throw new Error(`Unresolved target node ${patch.targetNodeId}`);
-        }
-        state.writer.patchU64(patch.operandOffset, targetOffset);
-    }
-
-    const entryPoints = entryTargets.map((target) => {
-        const executionOffset = state.nodeOffsets.get(nodeId(target));
-        if (executionOffset === undefined) {
-            throw new Error(`Unresolved ENTRY target ${nodeId(target)}`);
-        }
-        return { executionOffset };
+    const entryPoints = entries.map((entry, index) => {
+        const executionOffset = state.nodeOffsets.get(nodeId(entryTargets[index]))!;
+        const condition = entry.getData().empathyEntryCondition;
+        if (!condition) return { executionOffset, name: normalizedNodeText(entry) };
+        const predicateOffset = state.writer.offset;
+        emitCondition(state, condition);
+        state.writer.opcode(EmpathyBytecodeOpcode.REJECT_FALSE);
+        state.writer.opcode(EmpathyBytecodeOpcode.PUSH_U32);
+        state.writer.u32(Number(entry.getData().empathyEntryMatchValue));
+        state.writer.opcode(EmpathyBytecodeOpcode.MATCH);
+        return { executionOffset, predicateOffset, name: normalizedNodeText(entry) };
     });
-
+    for (const jump of state.patches) {
+        const targetOffset = state.nodeOffsets.get(jump.targetNodeId);
+        if (targetOffset === undefined) throw new Error(`Unresolved target node ${jump.targetNodeId}`);
+        state.writer.patchU64(jump.operandOffset, targetOffset);
+    }
     return {
         bytecode: state.writer.finish(),
         entryPoints,
@@ -375,6 +793,8 @@ export function compileCanvas(canvas: Canvas): CompileResult {
         characters: state.characters,
         choices: state.choices,
         nodeOffsets: state.nodeOffsets,
+        tables,
+        parameters,
     };
 }
 
@@ -396,18 +816,37 @@ function generatedName(sourceName: string): { macro: string; symbol: string } {
     let clean = sourceName.replace(/[^A-Za-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
     if (clean.length === 0) clean = "CANVAS";
     if (/^[0-9]/.test(clean)) clean = `canvas_${clean}`;
-    return {
-        macro: `${clean.toUpperCase()}_EMPATHY`,
-        symbol: `${clean.toLowerCase()}_empathy`,
-    };
+    return { macro: `${clean.toUpperCase()}_EMPATHY`, symbol: `${clean.toLowerCase()}_empathy` };
+}
+
+const cKeywords = new Set(["auto", "break", "case", "char", "const", "continue", "default", "do", "double", "else", "enum", "extern", "float", "for", "goto", "if", "inline", "int", "long", "register", "restrict", "return", "short", "signed", "sizeof", "static", "struct", "switch", "typedef", "union", "unsigned", "void", "volatile", "while"]);
+
+function cIdentifier(value: string, fallback: string): string {
+    let result = value.replace(/[^A-Za-z0-9_]/g, "_");
+    if (result.length === 0) result = fallback;
+    if (/^[0-9]/.test(result) || cKeywords.has(result)) result = `_${result}`;
+    return result;
+}
+
+function cTypeName(value: string): string {
+    const words = value.split(/[^A-Za-z0-9]+/).filter(Boolean);
+    let result = words.map((word) => word[0].toUpperCase() + word.slice(1)).join("") || "Table";
+    if (/^[0-9]/.test(result)) result = `Table${result}`;
+    return `${result}State`;
+}
+
+function uniqueName(base: string, used: Set<string>): string {
+    let result = base;
+    for (let suffix = 2; used.has(result); ++suffix) result = `${base}_${suffix}`;
+    used.add(result);
+    return result;
 }
 
 function stringTable(symbol: string, values: readonly string[]): string[] {
-    const contents = values.length > 0 ? values.map((value) => `    ${cString(value)},`) : ["    0,"];
     return [
         `static const char *const ${symbol}[] =`,
         "{",
-        ...contents,
+        ...(values.length > 0 ? values.map((value) => `    ${cString(value)},`) : ["    0,"]),
         "};",
     ];
 }
@@ -421,11 +860,46 @@ export function generateHeader(result: CompileResult, sourceName: string): strin
     const lineRange = atomRange(result.lines.length);
     const characterRange = atomRange(result.characters.length);
     const choiceRange = atomRange(result.choices.length);
+    const usedTypes = new Set<string>();
+    const tableTypes = new Map(result.tables.map((table) => [table.name, uniqueName(cTypeName(table.name), usedTypes)]));
+    const tableConstants = new Map<string, string>();
+    const usedTableConstants = new Set<string>();
+    for (const table of result.tables) {
+        tableConstants.set(table.name, uniqueName(`${macro}_PARAMETER_TABLE_${cIdentifier(table.name, "TABLE").toUpperCase()}`, usedTableConstants));
+    }
+    const parameterConstants = new Map<string, string>();
+    const usedParameterConstants = new Set<string>();
+    const fields = new Map<string, string>();
+    const fieldsByTable = new Map<string, Set<string>>();
+    for (const parameter of result.parameters) {
+        const tableFields = fieldsByTable.get(parameter.tableName) ?? new Set<string>();
+        fieldsByTable.set(parameter.tableName, tableFields);
+        fields.set(parameter.name, uniqueName(cIdentifier(parameter.variableName, "value"), tableFields));
+        const base = `${macro}_PARAMETER_${cIdentifier(parameter.tableName, "TABLE").toUpperCase()}_${cIdentifier(parameter.variableName, "VALUE").toUpperCase()}`;
+        parameterConstants.set(parameter.name, uniqueName(base, usedParameterConstants));
+    }
+    const typeNames: Record<NarrativeVariableType, string> = {
+        boolean: "uint8_t",
+        integer: "int32_t",
+        float: "float",
+    };
+    const valueTypes: Record<NarrativeVariableType, string> = {
+        boolean: "EMPATHY_VALUE_BASE_TYPE_UINT8",
+        integer: "EMPATHY_VALUE_BASE_TYPE_INT32",
+        float: "EMPATHY_VALUE_BASE_TYPE_FLOAT32",
+    };
+    const accesses: Record<NarrativeVariableAccess, string> = {
+        read: "EMPATHY_PARAMETER_ACCESS_FLAGS_READ",
+        write: "EMPATHY_PARAMETER_ACCESS_FLAGS_WRITE",
+        "read-write": "EMPATHY_PARAMETER_ACCESS_FLAGS_READ_WRITE",
+    };
     const lines: string[] = [
         "#pragma once",
         "",
         "// Generated by the Empathy Obsidian POC. Do not edit manually.",
         "#include <empathy.h>",
+        "#include <stddef.h>",
+        "#include <stdint.h>",
         "",
         `typedef enum ${macro}_AtomType_t`,
         "{",
@@ -441,6 +915,28 @@ export function generateHeader(result: CompileResult, sourceName: string): strin
         `    ${macro}_YIELD_TYPE_SAY = ${EmpathyPocYieldType.SAY},`,
         `} ${macro}_YieldType;`,
         "",
+    ];
+    if (result.tables.length > 0) {
+        lines.push(`typedef enum ${macro}_ParameterTable_t`, "{");
+        for (const table of result.tables) lines.push(`    ${tableConstants.get(table.name)} = ${table.index},`);
+        lines.push(`} ${macro}_ParameterTable;`, "");
+    }
+    if (result.parameters.length > 0) {
+        lines.push(`typedef enum ${macro}_Parameter_t`, "{");
+        for (const parameter of result.parameters) lines.push(`    ${parameterConstants.get(parameter.name)} = ${parameter.parameterIndex},`);
+        lines.push(`} ${macro}_Parameter;`, "");
+    }
+    for (const table of result.tables) {
+        lines.push(`typedef struct ${tableTypes.get(table.name)}`, "{");
+        for (const parameter of result.parameters.filter((value) => value.tableName === table.name)) {
+            lines.push(`    ${typeNames[parameter.type]} ${fields.get(parameter.name)};`);
+        }
+        lines.push(`} ${tableTypes.get(table.name)};`, "");
+    }
+    lines.push(
+        `#define ${macro}_PARAMETER_TABLE_COUNT ${result.tables.length}u`,
+        `#define ${macro}_REQUIRED_PARAMETER_TABLE_COUNT ${result.tables.length}u`,
+        `#define ${macro}_PARAMETER_COUNT ${result.parameters.length}u`,
         `#define ${macro}_LINE_COUNT ${result.lines.length}u`,
         `#define ${macro}_CHARACTER_COUNT ${result.characters.length}u`,
         `#define ${macro}_CHOICE_COUNT ${result.choices.length}u`,
@@ -448,16 +944,11 @@ export function generateHeader(result: CompileResult, sourceName: string): strin
         `#define ${macro}_BYTECODE_VERSION 0x${EMPATHY_BYTECODE_VERSION.toString(16).toUpperCase().padStart(8, "0")}u`,
         `#define ${macro}_BYTECODE_SIZE ${result.bytecode.length}u`,
         "",
-    ];
-
+    );
     for (let id = 0; id < result.lines.length; ++id) lines.push(`#define ${macro}_LINE_${id} ${id}u`);
     for (let id = 0; id < result.characters.length; ++id) lines.push(`#define ${macro}_CHARACTER_${id} ${id}u`);
     for (let id = 0; id < result.choices.length; ++id) lines.push(`#define ${macro}_CHOICE_${id} ${id}u`);
-    lines.push("");
-
-    lines.push(...stringTable(`${symbol}_line_strings`, result.lines), "");
-    lines.push(...stringTable(`${symbol}_character_strings`, result.characters), "");
-    lines.push(...stringTable(`${symbol}_choice_strings`, result.choices), "");
+    lines.push("", ...stringTable(`${symbol}_line_strings`, result.lines), "", ...stringTable(`${symbol}_character_strings`, result.characters), "", ...stringTable(`${symbol}_choice_strings`, result.choices), "");
     lines.push(
         `static const Empathy_AtomTypeDesc ${symbol}_atom_types[] =`,
         "{",
@@ -466,6 +957,17 @@ export function generateHeader(result: CompileResult, sourceName: string): strin
         `    {${macro}_ATOM_TYPE_CHOICE, ${choiceRange.min}u, ${choiceRange.max}u},`,
         "};",
         "",
+    );
+    if (result.parameters.length > 0) {
+        lines.push(`static const Empathy_ParameterDesc ${symbol}_parameters[] =`, "{");
+        for (const parameter of result.parameters) {
+            lines.push(
+                `    {${tableConstants.get(parameter.tableName)}, {${valueTypes[parameter.type]}, 0u}, ${accesses[parameter.access]}, offsetof(${tableTypes.get(parameter.tableName)}, ${fields.get(parameter.name)})},`,
+            );
+        }
+        lines.push("};", "");
+    }
+    lines.push(
         `static const Empathy_ValueType ${symbol}_choice_resume_types[] =`,
         "{",
         "    {EMPATHY_VALUE_BASE_TYPE_UINT32, 0u},",
@@ -481,7 +983,7 @@ export function generateHeader(result: CompileResult, sourceName: string): strin
         `static const Empathy_ProgramLayoutDesc ${symbol}_layout_desc =`,
         "{",
         `    3u, ${symbol}_atom_types,`,
-        "    0u, 0,",
+        `    ${result.parameters.length}u, ${result.parameters.length > 0 ? `${symbol}_parameters` : "0"},`,
         `    3u, ${symbol}_yields,`,
         "};",
         "",
@@ -489,11 +991,8 @@ export function generateHeader(result: CompileResult, sourceName: string): strin
         "{",
     );
     for (const entryPoint of result.entryPoints) {
-        lines.push(`    {${entryPoint.executionOffset}u, EMPATHY_PROGRAM_OFFSET_NONE},`);
+        lines.push(`    {${entryPoint.executionOffset}u, ${entryPoint.predicateOffset === undefined ? "EMPATHY_PROGRAM_OFFSET_NONE" : `${entryPoint.predicateOffset}u`}},`);
     }
-    lines.push(
-        "};",
-        "",
-    );
+    lines.push("};", "");
     return lines.join("\n");
 }
