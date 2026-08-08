@@ -552,11 +552,18 @@ export function validateCanvas(canvas: Canvas, variables: readonly NarrativeVari
                     issueForNode(issues, node, `SET assignment ${assignmentIndex}: variable ${String(assignment.variable || "(not selected)")} is missing`);
                     return;
                 }
-                if (!isWritable(variable)) {
+                const operation = String(assignment.operation);
+                if (operation === "=" && !isWritable(variable)) {
                     issueForNode(issues, node, `SET assignment ${assignmentIndex}: variable ${variable.name} is read-only and cannot be assigned`);
+                } else if ((operation === "+=" || operation === "-=") && (!isReadable(variable) || !isWritable(variable))) {
+                    issueForNode(
+                        issues,
+                        node,
+                        `SET assignment ${assignmentIndex}: compound assignment ${operation} requires both read and write access to ${variable.name}`,
+                    );
                 }
                 const operations = variable.type === NarrativeVariableType.BOOLEAN ? ["="] : ["=", "+=", "-="];
-                if (!operations.includes(String(assignment.operation))) {
+                if (!operations.includes(operation)) {
                     issueForNode(issues, node, `SET assignment ${assignmentIndex}: operation ${String(assignment.operation)} is not valid for ${variable.type} ${variable.name}`);
                 }
                 if (parsedLiteral(variable, assignment.literal) === undefined) {
@@ -775,7 +782,7 @@ function compileChoice(state: CompileState, node: CanvasNode): void {
     state.writer.opcode(EmpathyBytecodeOpcode.YIELD);
     state.writer.u32(EmpathyPocYieldType.CHOICE);
     state.writer.opcode(EmpathyBytecodeOpcode.YIELD_TAKE);
-    for (let choiceIndex = 0; choiceIndex + 1 < targets.length; ++choiceIndex) {
+    for (let choiceIndex = 0; choiceIndex < targets.length; ++choiceIndex) {
         state.writer.opcode(EmpathyBytecodeOpcode.DUP);
         state.writer.opcode(EmpathyBytecodeOpcode.PUSH_U32);
         state.writer.u32(choiceIndex);
@@ -788,7 +795,7 @@ function compileChoice(state: CompileState, node: CanvasNode): void {
         state.writer.patchU64(nextComparisonOffset, state.writer.offset);
     }
     state.writer.opcode(EmpathyBytecodeOpcode.DROP);
-    emitJump(state, targets[targets.length - 1]);
+    state.writer.opcode(EmpathyBytecodeOpcode.END);
 }
 
 function compilePortalReceiver(state: CompileState, node: CanvasNode): void {

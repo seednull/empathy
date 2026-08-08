@@ -12,6 +12,7 @@ import {
     compileCanvas,
     EmpathyCanvasNodeKind,
     generateHeader,
+    NarrativeAssignment,
     NarrativeCondition,
     NarrativeVariable,
     parseVariableName,
@@ -83,6 +84,87 @@ function decode(bytecode: Uint8Array): Instruction[] {
     return result;
 }
 
+function assertJumpTargetsOnInstructionBoundaries(bytecode: Uint8Array): void {
+    const instructions = decode(bytecode);
+    const boundaries = new Set(instructions.map(({ offset }) => offset));
+    for (const instruction of instructions) {
+        if (
+            instruction.opcode !== EmpathyBytecodeOpcode.JUMP &&
+            instruction.opcode !== EmpathyBytecodeOpcode.JUMP_FALSE &&
+            instruction.opcode !== EmpathyBytecodeOpcode.JUMP_TRUE
+        ) continue;
+        const target = Number(view(bytecode).getBigUint64(instruction.offset + 1, true));
+        assert.ok(boundaries.has(target), `jump at ${instruction.offset} targets non-instruction byte ${target}`);
+    }
+}
+
+interface ChoiceDispatchResult {
+    ended: boolean;
+    stack: number[];
+    targetOffset?: number;
+}
+
+function executeChoiceDispatch(
+    bytecode: Uint8Array,
+    choiceOffset: number,
+    selected: number,
+    targetOffsets: ReadonlySet<number>,
+): ChoiceDispatchResult {
+    const instructions = decode(bytecode);
+    const byOffset = new Map(instructions.map((instruction) => [instruction.offset, instruction]));
+    const take = instructions.find(({ offset, opcode }) =>
+        offset >= choiceOffset && opcode === EmpathyBytecodeOpcode.YIELD_TAKE);
+    assert.ok(take, "CHOICE dispatch must take the host response");
+    const stack = [selected];
+    let offset = take.offset + take.size;
+    for (let step = 0; step < 100; ++step) {
+        if (targetOffsets.has(offset)) return { ended: false, stack, targetOffset: offset };
+        const instruction = byOffset.get(offset);
+        assert.ok(instruction, `CHOICE dispatch reached non-instruction byte ${offset}`);
+        const next = offset + instruction.size;
+        switch (instruction.opcode) {
+            case EmpathyBytecodeOpcode.DUP:
+                assert.ok(stack.length > 0);
+                stack.push(stack.at(-1)!);
+                offset = next;
+                break;
+            case EmpathyBytecodeOpcode.PUSH_U32:
+                stack.push(view(bytecode).getUint32(offset + 1, true));
+                offset = next;
+                break;
+            case EmpathyBytecodeOpcode.EQUAL: {
+                assert.ok(stack.length >= 2);
+                const right = stack.pop()!;
+                const left = stack.pop()!;
+                stack.push(left === right ? 1 : 0);
+                offset = next;
+                break;
+            }
+            case EmpathyBytecodeOpcode.JUMP_FALSE: {
+                assert.ok(stack.length > 0);
+                const condition = stack.pop()!;
+                offset = condition === 0
+                    ? Number(view(bytecode).getBigUint64(offset + 1, true))
+                    : next;
+                break;
+            }
+            case EmpathyBytecodeOpcode.DROP:
+                assert.ok(stack.length > 0);
+                stack.pop();
+                offset = next;
+                break;
+            case EmpathyBytecodeOpcode.JUMP:
+                offset = Number(view(bytecode).getBigUint64(offset + 1, true));
+                break;
+            case EmpathyBytecodeOpcode.END:
+                return { ended: true, stack };
+            default:
+                assert.fail(`unexpected opcode ${instruction.opcode} in CHOICE dispatch`);
+        }
+    }
+    assert.fail("CHOICE dispatch did not terminate");
+}
+
 function view(bytecode: Uint8Array): DataView {
     return new DataView(bytecode.buffer, bytecode.byteOffset, bytecode.byteLength);
 }
@@ -91,6 +173,13 @@ function simpleEndGraph(): { canvas: Canvas; entry: MockNode; end: MockNode } {
     const entry = node("entry", EmpathyCanvasNodeKind.ENTRY, { text: "start" });
     const end = node("end", EmpathyCanvasNodeKind.END);
     return { canvas: graph([entry, end], [new MockEdge("entry-end", entry, end)]), entry, end };
+}
+
+function setGraph(assignments: NarrativeAssignment[]): Canvas {
+    const entry = node("entry", EmpathyCanvasNodeKind.ENTRY);
+    const set = node("set", EmpathyCanvasNodeKind.SET, { empathyAssignments: assignments });
+    const end = node("end", EmpathyCanvasNodeKind.END);
+    return graph([entry, set, end], [new MockEdge("entry-set", entry, set), new MockEdge("set-end", set, end)]);
 }
 
 test("parses exactly one qualified-name separator", () => {
@@ -132,12 +221,25 @@ test("derives real parameter tables by first variable occurrence", () => {
     ]);
 });
 
+test("patches a direct continuation jump to an instruction boundary", () => {
+    const entry = node("entry", EmpathyCanvasNodeKind.ENTRY);
+    const line = node("line", EmpathyCanvasNodeKind.LINE, { text: "Continue" });
+    const end = node("end", EmpathyCanvasNodeKind.END);
+    const result = compileCanvas(graph(
+        [entry, line, end],
+        [new MockEdge("entry-line", entry, line), new MockEdge("line-end", line, end)],
+    ), variables);
+    assertJumpTargetsOnInstructionBoundaries(result.bytecode);
+    const jump = decode(result.bytecode).find(({ opcode }) => opcode === EmpathyBytecodeOpcode.JUMP)!;
+    assert.equal(Number(view(result.bytecode).getBigUint64(jump.offset + 1, true)), result.nodeOffsets.get("end"));
+});
+
 test("lowers SET values and arithmetic with global parameter indices", () => {
     const entry = node("entry", EmpathyCanvasNodeKind.ENTRY);
     const set = node("set", EmpathyCanvasNodeKind.SET, { empathyAssignments: [
         { variable: "world.radio_found", operation: "=", literal: "true" },
         { variable: "npc.trust", operation: "+=", literal: "0.1" },
-        { variable: "quest.stage", operation: "+=", literal: "1" },
+        { variable: "quest.stage", operation: "-=", literal: "1" },
     ] });
     const end = node("end", EmpathyCanvasNodeKind.END);
     const result = compileCanvas(graph(
@@ -149,16 +251,77 @@ test("lowers SET values and arithmetic with global parameter indices", () => {
         EmpathyBytecodeOpcode.PUSH_U8, EmpathyBytecodeOpcode.STORE,
         EmpathyBytecodeOpcode.LOAD, EmpathyBytecodeOpcode.PUSH_F32, EmpathyBytecodeOpcode.ADD,
         EmpathyBytecodeOpcode.STORE,
-        EmpathyBytecodeOpcode.LOAD, EmpathyBytecodeOpcode.PUSH_I32, EmpathyBytecodeOpcode.ADD,
+        EmpathyBytecodeOpcode.LOAD, EmpathyBytecodeOpcode.PUSH_I32, EmpathyBytecodeOpcode.SUB,
         EmpathyBytecodeOpcode.STORE, EmpathyBytecodeOpcode.JUMP, EmpathyBytecodeOpcode.END,
     ]);
     const data = view(result.bytecode);
     const loadStores = instructions.filter(({ opcode }) => opcode === EmpathyBytecodeOpcode.LOAD || opcode === EmpathyBytecodeOpcode.STORE);
     assert.deepEqual(loadStores.map(({ offset }) => data.getUint32(offset + 1, true)), [0, 1, 1, 3, 3]);
+    const booleanPush = instructions.find(({ opcode }) => opcode === EmpathyBytecodeOpcode.PUSH_U8)!;
     const floatPush = instructions.find(({ opcode }) => opcode === EmpathyBytecodeOpcode.PUSH_F32)!;
     const integerPush = instructions.find(({ opcode }) => opcode === EmpathyBytecodeOpcode.PUSH_I32)!;
+    assert.equal(data.getUint8(booleanPush.offset + 1), 1);
     assert.ok(Math.abs(data.getFloat32(floatPush.offset + 1, true) - 0.1) < 1e-6);
     assert.equal(data.getInt32(integerPush.offset + 1, true), 1);
+});
+
+test("allows plain SET assignment to a write-only variable", () => {
+    const writeOnly: NarrativeVariable[] = [{ name: "state.value", type: "float", access: "write" }];
+    const result = compileCanvas(setGraph([
+        { variable: "state.value", operation: "=", literal: "1" },
+    ]), writeOnly);
+    assert.deepEqual(decode(result.bytecode).map(({ opcode }) => opcode), [
+        EmpathyBytecodeOpcode.PUSH_F32,
+        EmpathyBytecodeOpcode.STORE,
+        EmpathyBytecodeOpcode.JUMP,
+        EmpathyBytecodeOpcode.END,
+    ]);
+});
+
+test("rejects SET += through a write-only variable", () => {
+    const writeOnly: NarrativeVariable[] = [{ name: "state.value", type: "float", access: "write" }];
+    assert.throws(() => compileCanvas(setGraph([
+        { variable: "state.value", operation: "+=", literal: "1" },
+    ]), writeOnly), /compound assignment \+= requires both read and write access/);
+});
+
+test("rejects SET -= through a write-only variable", () => {
+    const writeOnly: NarrativeVariable[] = [{ name: "state.value", type: "float", access: "write" }];
+    assert.throws(() => compileCanvas(setGraph([
+        { variable: "state.value", operation: "-=", literal: "1" },
+    ]), writeOnly), /compound assignment -= requires both read and write access/);
+});
+
+test("allows SET compound assignment to a read-write variable", () => {
+    const readWrite: NarrativeVariable[] = [{ name: "state.value", type: "float", access: "read-write" }];
+    const result = compileCanvas(setGraph([
+        { variable: "state.value", operation: "+=", literal: "1" },
+    ]), readWrite);
+    assert.deepEqual(decode(result.bytecode).map(({ opcode }) => opcode), [
+        EmpathyBytecodeOpcode.LOAD,
+        EmpathyBytecodeOpcode.PUSH_F32,
+        EmpathyBytecodeOpcode.ADD,
+        EmpathyBytecodeOpcode.STORE,
+        EmpathyBytecodeOpcode.JUMP,
+        EmpathyBytecodeOpcode.END,
+    ]);
+});
+
+test("validates access for every assignment in a SET node", () => {
+    const writeOnly: NarrativeVariable[] = [
+        { name: "state.first", type: "float", access: "write" },
+        { name: "state.second", type: "float", access: "write" },
+    ];
+    const canvas = setGraph([
+        { variable: "state.first", operation: "=", literal: "1" },
+        { variable: "state.second", operation: "+=", literal: "1" },
+    ]);
+    const accessIssues = validateCanvas(canvas, writeOnly)
+        .filter(({ message }) => message.includes("read and write access"));
+    assert.deepEqual(accessIssues.map(({ message }) => message), [
+        "SET assignment 1: compound assignment += requires both read and write access to state.second",
+    ]);
+    assert.throws(() => compileCanvas(canvas, writeOnly), /SET assignment 1/);
 });
 
 test("rejects SET writes through read-only variables", () => {
@@ -211,11 +374,7 @@ test("lowers ordered conditional edges and an else directly", () => {
     assert.ok(opcodes.includes(EmpathyBytecodeOpcode.JUMP_FALSE));
     const load = instructions.find(({ opcode }) => opcode === EmpathyBytecodeOpcode.LOAD)!;
     assert.equal(view(result.bytecode).getUint32(load.offset + 1, true), 1);
-    const boundaries = new Set(instructions.map(({ offset }) => offset));
-    for (const instruction of instructions.filter(({ opcode }) =>
-        opcode === EmpathyBytecodeOpcode.JUMP || opcode === EmpathyBytecodeOpcode.JUMP_FALSE)) {
-        assert.ok(boundaries.has(Number(view(result.bytecode).getBigUint64(instruction.offset + 1, true))));
-    }
+    assertJumpTargetsOnInstructionBoundaries(result.bytecode);
 });
 
 test("rejects conditions that read write-only variables", () => {
@@ -335,6 +494,59 @@ test("orders CHOICE options only by authored indices", () => {
     assert.deepEqual(result.choices, ["First", "Second"]);
 });
 
+test("terminates invalid CHOICE resume indices without selecting the final option", () => {
+    const entry = node("entry", EmpathyCanvasNodeKind.ENTRY);
+    const choice = node("choice", EmpathyCanvasNodeKind.CHOICE, { empathyChoices: ["First", "Second"] });
+    const first = node("first", EmpathyCanvasNodeKind.END);
+    const second = node("second", EmpathyCanvasNodeKind.END);
+    const result = compileCanvas(graph(
+        [entry, choice, first, second],
+        [
+            new MockEdge("entry-choice", entry, choice),
+            new MockEdge("choice-first", choice, first, { empathyChoiceIndex: 0 }),
+            new MockEdge("choice-second", choice, second, { empathyChoiceIndex: 1 }),
+        ],
+    ), variables);
+    const firstOffset = result.nodeOffsets.get("first")!;
+    const secondOffset = result.nodeOffsets.get("second")!;
+    const targets = new Set([firstOffset, secondOffset]);
+    assert.deepEqual(executeChoiceDispatch(result.bytecode, result.nodeOffsets.get("choice")!, 0, targets), {
+        ended: false, stack: [], targetOffset: firstOffset,
+    });
+    assert.deepEqual(executeChoiceDispatch(result.bytecode, result.nodeOffsets.get("choice")!, 1, targets), {
+        ended: false, stack: [], targetOffset: secondOffset,
+    });
+    assert.deepEqual(executeChoiceDispatch(result.bytecode, result.nodeOffsets.get("choice")!, 2, targets), {
+        ended: true, stack: [],
+    });
+    assert.deepEqual(executeChoiceDispatch(result.bytecode, result.nodeOffsets.get("choice")!, 0xFFFFFFFF, targets), {
+        ended: true, stack: [],
+    });
+    assertJumpTargetsOnInstructionBoundaries(result.bytecode);
+});
+
+test("cleans the CHOICE resume index before entering a middle branch", () => {
+    const entry = node("entry", EmpathyCanvasNodeKind.ENTRY);
+    const choice = node("choice", EmpathyCanvasNodeKind.CHOICE, { empathyChoices: ["First", "Middle", "Final"] });
+    const first = node("first", EmpathyCanvasNodeKind.END);
+    const middle = node("middle", EmpathyCanvasNodeKind.END);
+    const final = node("final", EmpathyCanvasNodeKind.END);
+    const result = compileCanvas(graph(
+        [entry, choice, first, middle, final],
+        [
+            new MockEdge("entry-choice", entry, choice),
+            new MockEdge("choice-first", choice, first, { empathyChoiceIndex: 0 }),
+            new MockEdge("choice-middle", choice, middle, { empathyChoiceIndex: 1 }),
+            new MockEdge("choice-final", choice, final, { empathyChoiceIndex: 2 }),
+        ],
+    ), variables);
+    const targetOffsets = new Set(["first", "middle", "final"].map((id) => result.nodeOffsets.get(id)!));
+    assert.deepEqual(
+        executeChoiceDispatch(result.bytecode, result.nodeOffsets.get("choice")!, 1, targetOffsets),
+        { ended: false, stack: [], targetOffset: result.nodeOffsets.get("middle") },
+    );
+});
+
 test("does not use author edge labels as CHOICE option text", () => {
     const entry = node("entry", EmpathyCanvasNodeKind.ENTRY);
     const choice = node("choice", EmpathyCanvasNodeKind.CHOICE);
@@ -398,6 +610,7 @@ test("emits a converging target exactly once", () => {
     ), variables);
     assert.equal(decode(result.bytecode).filter(({ opcode }) => opcode === EmpathyBytecodeOpcode.END).length, 1);
     assert.equal(result.nodeOffsets.get("end") !== undefined, true);
+    assertJumpTargetsOnInstructionBoundaries(result.bytecode);
 });
 
 test("routes multiple receivers and incoming branches through one transmitter", () => {
@@ -421,12 +634,57 @@ test("routes multiple receivers and incoming branches through one transmitter", 
     const endOffset = result.nodeOffsets.get("end")!;
     for (const receiver of [receiverA, receiverB]) {
         const receiverOffset = result.nodeOffsets.get(receiver.id)!;
+        assert.ok(receiverOffset < endOffset);
         assert.equal(result.bytecode[receiverOffset], EmpathyBytecodeOpcode.JUMP);
         assert.equal(Number(view(result.bytecode).getBigUint64(receiverOffset + 1, true)), endOffset);
     }
     assert.equal(result.nodeOffsets.has("transmitter"), false);
     assert.equal(Array.from(canvas.edges.values()).some((edge) =>
         (edge.from?.node === receiverA || edge.from?.node === receiverB) && edge.to?.node === transmitter), false);
+    assert.equal(decode(result.bytecode).filter(({ opcode }) => opcode === EmpathyBytecodeOpcode.END).length, 2);
+    assertJumpTargetsOnInstructionBoundaries(result.bytecode);
+});
+
+test("routes a portal by stable identity independently of its display name", () => {
+    const entry = node("entry", EmpathyCanvasNodeKind.ENTRY);
+    const receiver = portalNode("receiver", EmpathyCanvasNodeKind.PORTAL_RECEIVER);
+    const transmitter = portalNode("transmitter", EmpathyCanvasNodeKind.PORTAL_TRANSMITTER);
+    const end = node("end", EmpathyCanvasNodeKind.END);
+    const canvas = graph(
+        [entry, receiver, transmitter, end],
+        [new MockEdge("entry-receiver", entry, receiver), new MockEdge("transmitter-end", transmitter, end)],
+    );
+    const beforeRename = compileCanvas(canvas, variables);
+    transmitter.setData({ ...transmitter.getData(), empathyPortalName: "Renamed portal" });
+    const afterRename = compileCanvas(canvas, variables);
+    assert.deepEqual(afterRename.bytecode, beforeRename.bytecode);
+    assert.equal(afterRename.nodeOffsets.get("receiver"), beforeRename.nodeOffsets.get("receiver"));
+});
+
+test("routes a portal to a continuation that was already emitted without duplicating it", () => {
+    const entry = node("entry", EmpathyCanvasNodeKind.ENTRY);
+    const choice = node("choice", EmpathyCanvasNodeKind.CHOICE, { empathyChoices: ["Direct", "Portal"] });
+    const receiver = portalNode("receiver", EmpathyCanvasNodeKind.PORTAL_RECEIVER);
+    const transmitter = portalNode("transmitter", EmpathyCanvasNodeKind.PORTAL_TRANSMITTER);
+    const end = node("end", EmpathyCanvasNodeKind.END);
+    const result = compileCanvas(graph(
+        [entry, choice, receiver, transmitter, end],
+        [
+            new MockEdge("entry-choice", entry, choice),
+            new MockEdge("choice-direct", choice, end, { empathyChoiceIndex: 0 }),
+            new MockEdge("choice-portal", choice, receiver, { empathyChoiceIndex: 1 }),
+            new MockEdge("transmitter-end", transmitter, end),
+        ],
+    ), variables);
+    const receiverOffset = result.nodeOffsets.get("receiver")!;
+    assert.ok(result.nodeOffsets.get("end")! < receiverOffset);
+    assert.equal(result.bytecode[receiverOffset], EmpathyBytecodeOpcode.JUMP);
+    assert.equal(
+        Number(view(result.bytecode).getBigUint64(receiverOffset + 1, true)),
+        result.nodeOffsets.get("end"),
+    );
+    assert.equal(decode(result.bytecode).filter(({ opcode }) => opcode === EmpathyBytecodeOpcode.END).length, 2);
+    assertJumpTargetsOnInstructionBoundaries(result.bytecode);
 });
 
 test("rejects an outgoing visual edge from a portal receiver", () => {
