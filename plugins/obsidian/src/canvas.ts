@@ -187,6 +187,12 @@ const nodeSemanticKeys = [
     "empathyPortalId", "empathyPortalName",
 ] as const;
 const edgeSemanticKeys = ["empathyCondition", "empathyElse", "empathyConditionOrder", "empathyChoiceAtom"] as const;
+const clearedTransitionMetadata: Partial<CanvasEdgeData> = {
+    empathyCondition: undefined,
+    empathyElse: undefined,
+    empathyConditionOrder: undefined,
+};
+const clearedChoiceMetadata: Partial<CanvasEdgeData> = { empathyChoiceAtom: undefined };
 
 function initialText(kind: EmpathyCanvasNodeKind): string {
     if (kind === EmpathyCanvasNodeKind.SAY) return "Dialogue";
@@ -808,7 +814,13 @@ export class EmpathyCanvasIntegration {
                 "choice",
                 () => this.openEdgeEditor(patch, edge, "choice"),
             );
-            append("Unlink Empathy choice", "unlink", "clear", () => this.clearChoiceEdge(patch, edge), data.empathyChoiceAtom === undefined);
+            append(
+                "Unlink Empathy choice",
+                "unlink",
+                "clear",
+                () => this.persistEdgeData(patch, edge, clearedChoiceMetadata),
+                data.empathyChoiceAtom === undefined,
+            );
             return buttons;
         }
         append(
@@ -829,7 +841,7 @@ export class EmpathyCanvasIntegration {
             "Clear Empathy condition",
             "circle-off",
             "clear",
-            () => this.clearEdgeMetadata(patch, edge),
+            () => this.persistEdgeData(patch, edge, clearedTransitionMetadata),
             data.empathyCondition === undefined && !data.empathyElse,
         );
         return buttons;
@@ -1629,7 +1641,7 @@ export class EmpathyCanvasIntegration {
             menu.addItem((item) => item.setTitle(linked ? "Change linked Empathy choice…" : "Link Empathy choice…").setSection("action").setIcon("list-ordered")
                 .onClick(() => this.openEdgeEditor(patch, edge, "choice")));
             menu.addItem((item) => item.setTitle("Unlink Empathy choice").setSection("action").setIcon("unlink")
-                .setDisabled(!linked).onClick(() => this.clearChoiceEdge(patch, edge)));
+                .setDisabled(!linked).onClick(() => this.persistEdgeData(patch, edge, clearedChoiceMetadata)));
             return;
         }
         const data = edge.getData();
@@ -1641,7 +1653,7 @@ export class EmpathyCanvasIntegration {
             .onClick(() => this.makeEdgeElse(patch, edge)));
         if (data.empathyCondition !== undefined || data.empathyElse) {
             menu.addItem((item) => item.setTitle("Remove Empathy transition metadata").setSection("action").setIcon("circle-off")
-                .onClick(() => this.clearEdgeMetadata(patch, edge)));
+                .onClick(() => this.persistEdgeData(patch, edge, clearedTransitionMetadata)));
         }
     }
 
@@ -1765,14 +1777,6 @@ export class EmpathyCanvasIntegration {
         const source = edge.from?.node as RuntimeCanvasNode | undefined;
         if (source && patch.nodes.has(source)) this.decorateNode(patch, source);
         this.syncEdgeToolbar(patch);
-    }
-
-    private clearEdgeMetadata(patch: CanvasPatch, edge: RuntimeCanvasEdge): void {
-        this.persistEdgeData(patch, edge, { empathyCondition: undefined, empathyElse: undefined, empathyConditionOrder: undefined });
-    }
-
-    private clearChoiceEdge(patch: CanvasPatch, edge: RuntimeCanvasEdge): void {
-        this.persistEdgeData(patch, edge, { empathyChoiceAtom: undefined });
     }
 
     private closeEdgeEditor(patch: CanvasPatch): void {
