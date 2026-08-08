@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <iostream>
 #include <limits>
+#include <vector>
 
 enum AtomType : uint32_t
 {
@@ -19,19 +20,46 @@ enum YieldType : uint32_t
 	YIELD_TYPE_SAY,
 };
 
-static const char *lines[] =
+enum LineAtom : uint32_t
 {
-	"Rain erased the road behind the last train.",
-	"The signal tower is still lit.",
-	"Then either someone is waiting, or someone forgot to leave.",
-	"Mara climbs the iron stairs while the tower sways in the wind.",
-	"The lamp is warm. Whoever lit it cannot be far.",
-	"Ilya follows the fresh footprints along the flooded platform.",
-	"They turn back toward the station. We are being led in a circle.",
-	"Both trails end at the locked waiting room.",
-	"You took your time.",
-	"We took the scenic route.",
-	"Inside, the station clock begins to move again.",
+	LINE_RAIN_ERASED_ROAD = 1000,
+	LINE_SIGNAL_TOWER_LIT,
+	LINE_SOMEONE_WAITING,
+	LINE_MARA_CLIMBS_TOWER,
+	LINE_LAMP_IS_WARM,
+	LINE_ILYA_FOLLOWS_FOOTPRINTS,
+	LINE_LED_IN_A_CIRCLE,
+	LINE_TRAILS_END_AT_WAITING_ROOM,
+	LINE_KEEPER_TOOK_YOUR_TIME,
+	LINE_MARA_SCENIC_ROUTE,
+	LINE_STATION_CLOCK_MOVES,
+};
+
+enum ChoiceAtom : uint32_t
+{
+	CHOICE_CLIMB_TO_SIGNAL_ROOM = 73,
+	CHOICE_FOLLOW_FOOTPRINTS = 91,
+};
+
+struct AtomText
+{
+	uint32_t value;
+	const char *text;
+};
+
+static const AtomText lines[] =
+{
+	{LINE_RAIN_ERASED_ROAD, "Rain erased the road behind the last train."},
+	{LINE_SIGNAL_TOWER_LIT, "The signal tower is still lit."},
+	{LINE_SOMEONE_WAITING, "Then either someone is waiting, or someone forgot to leave."},
+	{LINE_MARA_CLIMBS_TOWER, "Mara climbs the iron stairs while the tower sways in the wind."},
+	{LINE_LAMP_IS_WARM, "The lamp is warm. Whoever lit it cannot be far."},
+	{LINE_ILYA_FOLLOWS_FOOTPRINTS, "Ilya follows the fresh footprints along the flooded platform."},
+	{LINE_LED_IN_A_CIRCLE, "They turn back toward the station. We are being led in a circle."},
+	{LINE_TRAILS_END_AT_WAITING_ROOM, "Both trails end at the locked waiting room."},
+	{LINE_KEEPER_TOOK_YOUR_TIME, "You took your time."},
+	{LINE_MARA_SCENIC_ROUTE, "We took the scenic route."},
+	{LINE_STATION_CLOCK_MOVES, "Inside, the station clock begins to move again."},
 };
 
 static const char *characters[] =
@@ -41,11 +69,20 @@ static const char *characters[] =
 	"Keeper",
 };
 
-static const char *choices[] =
+static const AtomText choices[] =
 {
-	"Climb to the signal room",
-	"Follow the footprints",
+	{CHOICE_CLIMB_TO_SIGNAL_ROOM, "Climb to the signal room"},
+	{CHOICE_FOLLOW_FOOTPRINTS, "Follow the footprints"},
 };
+
+template <size_t N>
+static const char *findAtomText(const AtomText (&values)[N], uint32_t atom)
+{
+	for (const AtomText &value : values)
+		if (value.value == atom)
+			return value.text;
+	return nullptr;
+}
 
 static void handleLine(Empathy_Instance instance, Empathy_Machine machine)
 {
@@ -60,9 +97,9 @@ static void handleLine(Empathy_Instance instance, Empathy_Machine machine)
 	assert(line.type.base_type == EMPATHY_VALUE_BASE_TYPE_ATOM);
 	assert(line.type.atom_type == ATOM_TYPE_LINE);
 	assert(line.data.atom.type == ATOM_TYPE_LINE);
-	assert(line.data.atom.value < sizeof(lines) / sizeof(lines[0]));
-
-	std::cout << "\n" << lines[line.data.atom.value] << "\n";
+	const char *text = findAtomText(lines, line.data.atom.value);
+	assert(text);
+	std::cout << "\n" << text << "\n";
 
 	result = empathyYieldStackPop(instance, machine, &line);
 	assert(result == EMPATHY_SUCCESS);
@@ -70,30 +107,25 @@ static void handleLine(Empathy_Instance instance, Empathy_Machine machine)
 
 static void handleChoice(Empathy_Instance instance, Empathy_Machine machine)
 {
-	Empathy_Value count_value = {};
-	Empathy_Result result = empathyYieldStackPeek(instance, machine, 0, &count_value);
-	assert(result == EMPATHY_SUCCESS);
-	assert(count_value.type.base_type == EMPATHY_VALUE_BASE_TYPE_UINT32);
-
-	uint32_t count = count_value.data.u32;
-	assert(count > 0);
-
 	uint32_t stack_size = 0;
-	result = empathyGetYieldStackSize(instance, machine, &stack_size);
+	Empathy_Result result = empathyGetYieldStackSize(instance, machine, &stack_size);
 	assert(result == EMPATHY_SUCCESS);
-	assert(stack_size == count + 1);
+	assert(stack_size > 0);
+	std::vector<Empathy_Atom> visible_choices(stack_size);
 
 	std::cout << "\n";
-	for (uint32_t i = 0; i < count; ++i)
+	for (uint32_t i = 0; i < stack_size; ++i)
 	{
 		Empathy_Value choice = {};
-		result = empathyYieldStackPeek(instance, machine, count - i, &choice);
+		result = empathyYieldStackPeek(instance, machine, stack_size - 1 - i, &choice);
 		assert(result == EMPATHY_SUCCESS);
 		assert(choice.type.base_type == EMPATHY_VALUE_BASE_TYPE_ATOM);
 		assert(choice.type.atom_type == ATOM_TYPE_CHOICE);
 		assert(choice.data.atom.type == ATOM_TYPE_CHOICE);
-		assert(choice.data.atom.value < sizeof(choices) / sizeof(choices[0]));
-		std::cout << "  " << i + 1 << ". " << choices[choice.data.atom.value] << "\n";
+		const char *text = findAtomText(choices, choice.data.atom.value);
+		assert(text);
+		visible_choices[i] = choice.data.atom;
+		std::cout << "  " << i + 1 << ". " << text << "\n";
 	}
 
 	for (uint32_t i = 0; i < stack_size; ++i)
@@ -104,7 +136,8 @@ static void handleChoice(Empathy_Instance instance, Empathy_Machine machine)
 	}
 
 	Empathy_Value response = {};
-	response.type.base_type = EMPATHY_VALUE_BASE_TYPE_UINT32;
+	response.type = {EMPATHY_VALUE_BASE_TYPE_ATOM, ATOM_TYPE_CHOICE};
+	response.data.atom = visible_choices[0];
 
 	for (;;)
 	{
@@ -113,9 +146,9 @@ static void handleChoice(Empathy_Instance instance, Empathy_Machine machine)
 		uint32_t selection = 0;
 		if (std::cin >> selection)
 		{
-			if (selection > 0 && selection <= count)
+			if (selection > 0 && selection <= stack_size)
 			{
-				response.data.u32 = selection - 1;
+				response.data.atom = visible_choices[selection - 1];
 				break;
 			}
 		}
@@ -127,7 +160,7 @@ static void handleChoice(Empathy_Instance instance, Empathy_Machine machine)
 
 		std::cin.clear();
 		std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
-		std::cout << "Choose a number from 1 to " << count << ".\n";
+		std::cout << "Choose a number from 1 to " << stack_size << ".\n";
 	}
 
 	result = empathyYieldStackPush(instance, machine, response);
@@ -147,7 +180,8 @@ static void handleSay(Empathy_Instance instance, Empathy_Machine machine)
 	assert(line.type.base_type == EMPATHY_VALUE_BASE_TYPE_ATOM);
 	assert(line.type.atom_type == ATOM_TYPE_LINE);
 	assert(line.data.atom.type == ATOM_TYPE_LINE);
-	assert(line.data.atom.value < sizeof(lines) / sizeof(lines[0]));
+	const char *line_text = findAtomText(lines, line.data.atom.value);
+	assert(line_text);
 
 	Empathy_Value character = {};
 	result = empathyYieldStackPeek(instance, machine, 0, &character);
@@ -157,7 +191,7 @@ static void handleSay(Empathy_Instance instance, Empathy_Machine machine)
 	assert(character.data.atom.type == ATOM_TYPE_CHARACTER);
 	assert(character.data.atom.value < sizeof(characters) / sizeof(characters[0]));
 
-	std::cout << characters[character.data.atom.value] << ": " << lines[line.data.atom.value] << "\n";
+	std::cout << characters[character.data.atom.value] << ": " << line_text << "\n";
 
 	result = empathyYieldStackPop(instance, machine, &character);
 	assert(result == EMPATHY_SUCCESS);
@@ -169,17 +203,17 @@ static void runStory(Empathy_Instance instance)
 {
 	Empathy_AtomTypeDesc atom_types[] =
 	{
-		{ATOM_TYPE_LINE, 0, static_cast<uint32_t>(sizeof(lines) / sizeof(lines[0])) - 1},
+		{ATOM_TYPE_LINE, LINE_RAIN_ERASED_ROAD, LINE_STATION_CLOCK_MOVES},
 		{ATOM_TYPE_CHARACTER, 0, static_cast<uint32_t>(sizeof(characters) / sizeof(characters[0])) - 1},
-		{ATOM_TYPE_CHOICE, 0, static_cast<uint32_t>(sizeof(choices) / sizeof(choices[0])) - 1},
+		{ATOM_TYPE_CHOICE, CHOICE_CLIMB_TO_SIGNAL_ROOM, CHOICE_FOLLOW_FOOTPRINTS},
 	};
 
 	// line   -> line atom
-	// choice -> choice atoms..., uint32 count; resumes with a uint32 selected index
+	// choice -> visible choice atoms only; resumes with the selected CHOICE atom
 	// say    -> line atom, character atom
 	Empathy_ValueType choice_resume_types[] =
 	{
-		{EMPATHY_VALUE_BASE_TYPE_UINT32, 0},
+		{EMPATHY_VALUE_BASE_TYPE_ATOM, ATOM_TYPE_CHOICE},
 	};
 
 	Empathy_YieldDesc yields[] =
@@ -201,75 +235,79 @@ static void runStory(Empathy_Instance instance)
 	assert(result == EMPATHY_SUCCESS);
 
 	/*
-	 * 000: line line[0]
-	 * 014: say  line[1], character[0]
-	 * 037: say  line[2], character[1]
-	 * 060: choice [choice[0], choice[1]], 2
-	 * 088: take selected index; jump to 150 unless it is zero
-	 * 104: line line[3]
-	 * 118: say  line[4], character[0]
-	 * 141: jump to shared section at 187
-	 * 150: line line[5]
-	 * 164: say  line[6], character[1]
-	 * 187: line line[7]
-	 * 201: say  line[8], character[2]
-	 * 224: say  line[9], character[0]
-	 * 247: line line[10]
-	 * 261: end
+	 * 000: line LINE_RAIN_ERASED_ROAD
+	 * 014: say  LINE_SIGNAL_TOWER_LIT, character[0]
+	 * 037: say  LINE_SOMEONE_WAITING, character[1]
+	 * 060: choice [CHOICE_CLIMB_TO_SIGNAL_ROOM, CHOICE_FOLLOW_FOOTPRINTS]
+	 * 083: take selected CHOICE atom and dispatch; invalid atoms end at 145
+	 * 146: first branch
+	 * 192: second branch
+	 * 229: shared ending
+	 * 303: end
 	 */
 	const uint8_t payload[] =
 	{
 		// line line[0]
-		EMPATHY_BYTECODE_OP_YIELD_PUSH_ATOM, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		EMPATHY_BYTECODE_OP_YIELD_PUSH_ATOM, 0x00, 0x00, 0x00, 0x00, 0xE8, 0x03, 0x00, 0x00,
 		EMPATHY_BYTECODE_OP_YIELD, 0x00, 0x00, 0x00, 0x00,
 
 		// say line[1], character[0]
-		EMPATHY_BYTECODE_OP_YIELD_PUSH_ATOM, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+		EMPATHY_BYTECODE_OP_YIELD_PUSH_ATOM, 0x00, 0x00, 0x00, 0x00, 0xE9, 0x03, 0x00, 0x00,
 		EMPATHY_BYTECODE_OP_YIELD_PUSH_ATOM, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 		EMPATHY_BYTECODE_OP_YIELD, 0x02, 0x00, 0x00, 0x00,
 
 		// say line[2], character[1]
-		EMPATHY_BYTECODE_OP_YIELD_PUSH_ATOM, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00,
+		EMPATHY_BYTECODE_OP_YIELD_PUSH_ATOM, 0x00, 0x00, 0x00, 0x00, 0xEA, 0x03, 0x00, 0x00,
 		EMPATHY_BYTECODE_OP_YIELD_PUSH_ATOM, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
 		EMPATHY_BYTECODE_OP_YIELD, 0x02, 0x00, 0x00, 0x00,
 
-		// choice [choice[0], choice[1]], 2
-		EMPATHY_BYTECODE_OP_YIELD_PUSH_ATOM, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-		EMPATHY_BYTECODE_OP_YIELD_PUSH_ATOM, 0x02, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
-		EMPATHY_BYTECODE_OP_YIELD_PUSH_U32, 0x02, 0x00, 0x00, 0x00,
+		// visible CHOICE atoms only
+		EMPATHY_BYTECODE_OP_YIELD_PUSH_ATOM, 0x02, 0x00, 0x00, 0x00, 0x49, 0x00, 0x00, 0x00,
+		EMPATHY_BYTECODE_OP_YIELD_PUSH_ATOM, 0x02, 0x00, 0x00, 0x00, 0x5B, 0x00, 0x00, 0x00,
 		EMPATHY_BYTECODE_OP_YIELD, 0x01, 0x00, 0x00, 0x00,
 
-		// if (selected index != 0) jump to the second branch at 150
+		// Dispatch the selected stable CHOICE atom. Unknown atoms end safely.
 		EMPATHY_BYTECODE_OP_YIELD_TAKE,
-		EMPATHY_BYTECODE_OP_PUSH_U32, 0x00, 0x00, 0x00, 0x00,
+		EMPATHY_BYTECODE_OP_DUP,
+		EMPATHY_BYTECODE_OP_PUSH_ATOM, 0x02, 0x00, 0x00, 0x00, 0x49, 0x00, 0x00, 0x00,
 		EMPATHY_BYTECODE_OP_EQUAL,
-		EMPATHY_BYTECODE_OP_JUMP_FALSE, 0x96, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		EMPATHY_BYTECODE_OP_JUMP_FALSE, 0x72, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		EMPATHY_BYTECODE_OP_DROP,
+		EMPATHY_BYTECODE_OP_JUMP, 0x92, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		EMPATHY_BYTECODE_OP_DUP,
+		EMPATHY_BYTECODE_OP_PUSH_ATOM, 0x02, 0x00, 0x00, 0x00, 0x5B, 0x00, 0x00, 0x00,
+		EMPATHY_BYTECODE_OP_EQUAL,
+		EMPATHY_BYTECODE_OP_JUMP_FALSE, 0x90, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		EMPATHY_BYTECODE_OP_DROP,
+		EMPATHY_BYTECODE_OP_JUMP, 0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		EMPATHY_BYTECODE_OP_DROP,
+		EMPATHY_BYTECODE_OP_END,
 
 		// First branch: signal room
-		EMPATHY_BYTECODE_OP_YIELD_PUSH_ATOM, 0x00, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00,
+		EMPATHY_BYTECODE_OP_YIELD_PUSH_ATOM, 0x00, 0x00, 0x00, 0x00, 0xEB, 0x03, 0x00, 0x00,
 		EMPATHY_BYTECODE_OP_YIELD, 0x00, 0x00, 0x00, 0x00,
-		EMPATHY_BYTECODE_OP_YIELD_PUSH_ATOM, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00,
+		EMPATHY_BYTECODE_OP_YIELD_PUSH_ATOM, 0x00, 0x00, 0x00, 0x00, 0xEC, 0x03, 0x00, 0x00,
 		EMPATHY_BYTECODE_OP_YIELD_PUSH_ATOM, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 		EMPATHY_BYTECODE_OP_YIELD, 0x02, 0x00, 0x00, 0x00,
-		EMPATHY_BYTECODE_OP_JUMP, 0xBB, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		EMPATHY_BYTECODE_OP_JUMP, 0xE5, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 
 		// Second branch: footprints
-		EMPATHY_BYTECODE_OP_YIELD_PUSH_ATOM, 0x00, 0x00, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00,
+		EMPATHY_BYTECODE_OP_YIELD_PUSH_ATOM, 0x00, 0x00, 0x00, 0x00, 0xED, 0x03, 0x00, 0x00,
 		EMPATHY_BYTECODE_OP_YIELD, 0x00, 0x00, 0x00, 0x00,
-		EMPATHY_BYTECODE_OP_YIELD_PUSH_ATOM, 0x00, 0x00, 0x00, 0x00, 0x06, 0x00, 0x00, 0x00,
+		EMPATHY_BYTECODE_OP_YIELD_PUSH_ATOM, 0x00, 0x00, 0x00, 0x00, 0xEE, 0x03, 0x00, 0x00,
 		EMPATHY_BYTECODE_OP_YIELD_PUSH_ATOM, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
 		EMPATHY_BYTECODE_OP_YIELD, 0x02, 0x00, 0x00, 0x00,
 
 		// Shared ending
-		EMPATHY_BYTECODE_OP_YIELD_PUSH_ATOM, 0x00, 0x00, 0x00, 0x00, 0x07, 0x00, 0x00, 0x00,
+		EMPATHY_BYTECODE_OP_YIELD_PUSH_ATOM, 0x00, 0x00, 0x00, 0x00, 0xEF, 0x03, 0x00, 0x00,
 		EMPATHY_BYTECODE_OP_YIELD, 0x00, 0x00, 0x00, 0x00,
-		EMPATHY_BYTECODE_OP_YIELD_PUSH_ATOM, 0x00, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
+		EMPATHY_BYTECODE_OP_YIELD_PUSH_ATOM, 0x00, 0x00, 0x00, 0x00, 0xF0, 0x03, 0x00, 0x00,
 		EMPATHY_BYTECODE_OP_YIELD_PUSH_ATOM, 0x01, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00,
 		EMPATHY_BYTECODE_OP_YIELD, 0x02, 0x00, 0x00, 0x00,
-		EMPATHY_BYTECODE_OP_YIELD_PUSH_ATOM, 0x00, 0x00, 0x00, 0x00, 0x09, 0x00, 0x00, 0x00,
+		EMPATHY_BYTECODE_OP_YIELD_PUSH_ATOM, 0x00, 0x00, 0x00, 0x00, 0xF1, 0x03, 0x00, 0x00,
 		EMPATHY_BYTECODE_OP_YIELD_PUSH_ATOM, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 		EMPATHY_BYTECODE_OP_YIELD, 0x02, 0x00, 0x00, 0x00,
-		EMPATHY_BYTECODE_OP_YIELD_PUSH_ATOM, 0x00, 0x00, 0x00, 0x00, 0x0A, 0x00, 0x00, 0x00,
+		EMPATHY_BYTECODE_OP_YIELD_PUSH_ATOM, 0x00, 0x00, 0x00, 0x00, 0xF2, 0x03, 0x00, 0x00,
 		EMPATHY_BYTECODE_OP_YIELD, 0x00, 0x00, 0x00, 0x00,
 		EMPATHY_BYTECODE_OP_END,
 	};
