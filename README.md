@@ -225,9 +225,9 @@ repository root; normal plugin builds do not require Python. Copy `plugins/obsid
 With a Canvas open, use the colored Empathy buttons in its bottom card toolbar to add an **ENTRY**,
 **SAY**, **LINE**, **CHOICE**, **SET**, **RECEIVER**, **TRANSMITTER**, or **END** at the viewport
 center. Receiver and transmitter have separate buttons and directional icons. The Empathy ribbon icon or
-**Open Empathy panel** command opens the plugin's main right sidebar. It currently contains an action
-that compiles the most recently active Canvas plus the narrative-variable editor, and leaves room for
-more authoring tools. Each variable is edited in one compact name/type/access/delete row. Destructive
+**Open Empathy panel** command opens the plugin's main right sidebar. It contains an action that
+compiles the most recently active Canvas, the narrative-variable editor, and an Atoms browser. Each
+variable is edited in one compact name/type/access/delete row. Destructive
 icon buttons use a confirmation dialog that also reports outstanding references. Variables persist
 in plugin data using only a qualified name, author-facing type, and access mode. A qualified name has
 exactly one dot:
@@ -253,7 +253,8 @@ available in the command palette, and an existing text card can be converted fro
 Every typed card has a persistent visual header. `SAY` has a separate character input; `SET` has a
 list of ordered typed variable/operation/literal assignments; `ENTRY` edits its name in the header
 and can have one typed availability predicate and a
-`UINT32` match value; and `CHOICE` owns an ordered, editable list of option texts with move controls.
+`UINT32` match value; and `CHOICE` owns an ordered, editable list of options with move controls and
+optional typed availability conditions. A false option condition hides that option completely.
 Headers show only the node type and its meaningful controls, without descriptive subtitles.
 ENTRY, CHOICE, SET, portal endpoints, and END hide the unused native text body while remaining
 ordinary Canvas text nodes, so native selection, resizing, connections, undo, and redo continue to
@@ -294,9 +295,9 @@ metadata stores qualified variable names, never generated table or parameter ind
 | Node | Card text | Edges |
 | --- | --- | --- |
 | `ENTRY` | Native body hidden; entry name is edited in the header | Exactly one unconditional outgoing edge; optional `empathyEntryCondition` and match value |
-| `SAY` | Dialogue only; character is edited in the header | One normal edge or an ordered conditional fan-out |
-| `LINE` | The complete line | One normal edge or an ordered conditional fan-out |
-| `CHOICE` | Native body hidden; option text lives in `empathyChoices` | Exactly one linked edge per option; `empathyChoiceIndex` selects the node-owned text |
+| `SAY` | Dialogue plus `empathyLineAtom`; character is edited in the header | One normal edge or an ordered conditional fan-out |
+| `LINE` | The complete line plus `empathyLineAtom` | One normal edge or an ordered conditional fan-out |
+| `CHOICE` | Native body hidden; each `empathyChoices` entry owns atom, text, and optional condition metadata | Exactly one linked edge per option; `empathyChoiceAtom` references the stable option atom |
 | `SET` | Native body hidden | One or more ordered assignments in `empathyAssignments`; exactly one unconditional edge |
 | `PORTAL` receiver | Native body hidden; its transmitter is selected in the header | Any number of incoming edges; no outgoing visual edge |
 | `PORTAL` transmitter | Native body hidden; its name is edited in the header | No incoming edges; exactly one unconditional outgoing edge |
@@ -310,9 +311,31 @@ integer, and float variables lower to `UINT8`, `INT32`, and `FLOAT32`; access ma
 Empathy parameter access flags. ENTRY nodes without availability predicates use
 `EMPATHY_PROGRAM_OFFSET_NONE` and therefore do not participate in `empathyMatch()`.
 
+Authored LINE and CHOICE atoms have two persistent identities: a numeric value used by the runtime
+and a human-readable key used by generated constants and tooling. Both live directly on the owning
+SAY/LINE node or CHOICE option. The plugin allocates numeric values monotonically per atom type and
+generates a lowercase slug key once; moving cards, reordering options, or editing display text does
+not change either identity. The POC accepts only this current metadata shape: missing atoms and
+non-atom CHOICE options remain validation errors and are never rewritten automatically. Native
+duplication of an already-known node receives fresh values and collision-suffixed keys.
+
+The Atoms section derives its rows from the active Canvas rather than a separate registry. It can
+search keys, display text, and numeric values; rename or explicitly regenerate a key; copy either
+identity; and select/zoom to the owning node. CHOICE source lookup uses node ID plus stable choice
+atom value, so it continues to resolve the same option after reordering. Numeric values are read-only
+in this UI.
+
+CHOICE runtime requests now contain only the visible CHOICE atoms on the yield stack, in authored
+display order. The host obtains the count with `empathyGetYieldStackSize()`, presents those atoms,
+then resumes by pushing the selected typed CHOICE atom. Option order is presentation only; neither
+the host nor bytecode remaps a visible index to an authored index. Unknown, wrong-type, unrelated,
+and currently hidden responses cannot enter a valid branch. If every option is hidden, execution
+ends without producing an empty CHOICE yield.
+
 Compilation performs lightweight structural and type validation before writing either artifact.
 Invalid nodes and edges receive Canvas styling/tooltips, and the compile Notice reports the first
-error plus a remaining count. The generated header includes `<stddef.h>` and `<stdint.h>`, one native
+error plus a remaining count. The generated header includes `<stddef.h>` and `<stdint.h>`, stable
+key-derived LINE/CHOICE constants and atom text tables, one native
 state struct per derived table, table and global parameter constants, parameter descriptors using
 `offsetof()` against the correct struct, and the required parameter-table count for
 `Empathy_MachineDesc.max_parameter_tables`. TypeScript deliberately does not emulate native struct
@@ -372,9 +395,10 @@ static library.
 [`samples/01_machine`](samples/01_machine) demonstrates the minimal runtime lifecycle, parameter
 layout declarations, native table binding, and execution of directly embedded bytecode.
 
-[`samples/02_narrative`](samples/02_narrative) demonstrates narrative flow with line, character, and
-choice atoms; line, choice, and dialogue yields; host-provided choice responses; branching; and a
-shared ending. All narrative data and bytecode are embedded directly in the sample.
+[`samples/02_narrative`](samples/02_narrative) demonstrates narrative flow with stable line and
+choice atoms plus character atoms; line, choice, and dialogue yields; a CHOICE request whose stack size is its
+visible option count; host responses using the selected CHOICE atom; branching; and a shared ending.
+All narrative data and bytecode are embedded directly in the sample.
 
 ## Tests
 
