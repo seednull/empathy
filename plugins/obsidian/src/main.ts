@@ -21,8 +21,8 @@ import {
 } from "./variables";
 
 interface InternalCanvasView extends ItemView {
-    canvas?: Canvas;
-    file?: TFile;
+    canvas: Canvas;
+    file: TFile | null;
 }
 
 interface EmpathyPluginData {
@@ -46,7 +46,7 @@ export default class EmpathyPlugin extends Plugin {
         }
         const withActiveCanvas = <T>(fallback: T, action: (canvas: Canvas, view: InternalCanvasView) => T): T => {
             const view = this.activeCanvasView();
-            return view?.canvas ? action(view.canvas, view) : fallback;
+            return view ? action(view.canvas, view) : fallback;
         };
         this.registerView(EMPATHY_PANEL_VIEW, (leaf) => new EmpathyPanelView(leaf, {
             getVariables: () => this.variables,
@@ -103,7 +103,7 @@ export default class EmpathyPlugin extends Plugin {
                 name: `Add ${kind.replace("-", " ").toUpperCase()} node`,
                 checkCallback: (checking) => {
                     const view = this.activeCanvasView();
-                    if (!view?.canvas || view.canvas.readonly) return false;
+                    if (!view || view.canvas.readonly) return false;
                     if (!checking) this.createNode(view.canvas, kind);
                     return true;
                 },
@@ -208,7 +208,7 @@ export default class EmpathyPlugin extends Plugin {
         this.compiling = true;
         try {
             const view = this.activeCanvasView();
-            if (!view?.canvas) {
+            if (!view) {
                 throw new Error("active view is not a Canvas");
             }
 

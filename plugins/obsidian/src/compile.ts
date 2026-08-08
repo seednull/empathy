@@ -30,8 +30,9 @@ export interface CanvasNodeData {
 }
 
 export interface CanvasNode {
-    id?: string;
+    id: string;
     getData(): CanvasNodeData;
+    setData(data: CanvasNodeData): void;
 }
 
 export interface CanvasEdgeData {
@@ -45,10 +46,11 @@ export interface CanvasEdgeData {
 }
 
 export interface CanvasEdge {
-    id?: string;
+    id: string;
     from?: { node?: CanvasNode };
     to?: { node?: CanvasNode };
     getData(): CanvasEdgeData;
+    setData(data: CanvasEdgeData): void;
 }
 
 export interface Canvas {
@@ -188,10 +190,6 @@ interface CompileState {
     choices: CompiledAuthoredAtom[];
 }
 
-function stableCompare(left: string, right: string): number {
-    return left < right ? -1 : left > right ? 1 : 0;
-}
-
 export function parseVariableName(name: string): ParsedVariableName | undefined {
     if (typeof name !== "string" || name !== name.trim()) return undefined;
     const parts = name.split(".");
@@ -205,49 +203,20 @@ export function getEmpathyCanvasNodeKind(data: CanvasNodeData): EmpathyCanvasNod
     return Object.values(EmpathyCanvasNodeKind).find((kind) => kind === value);
 }
 
-function nodeId(node: CanvasNode): string {
-    const id = node.id ?? node.getData().id;
-    if (typeof id !== "string" || id.length === 0) {
-        throw new Error("Canvas graph contains a node without an id");
-    }
-    return id;
-}
-
-function edgeId(edge: CanvasEdge): string {
-    const id = edge.id ?? edge.getData().id;
-    if (typeof id !== "string" || id.length === 0) {
-        throw new Error("Canvas graph contains an edge without an id");
-    }
-    return id;
-}
-
 function normalizedNodeText(node: CanvasNode): string {
     const data = node.getData();
-    const id = nodeId(node);
     if (data.type !== "text" || typeof data.text !== "string") {
-        throw new Error(`Unknown node type at ${id}: expected a Canvas text node`);
+        throw new Error(`Unknown node type at ${node.id}: expected a Canvas text node`);
     }
     return data.text.replace(/\r\n?/g, "\n").trim();
 }
 
 function outgoingEdges(canvas: Canvas, node: CanvasNode): CanvasEdge[] {
-    const id = nodeId(node);
-    return Array.from(canvas.edges.values()).filter((edge) => {
-        const from = edge.from?.node;
-        if (from === node) return true;
-        if (!from) return false;
-        return (from.id ?? from.getData().id) === id;
-    });
+    return Array.from(canvas.edges.values()).filter((edge) => edge.from?.node === node);
 }
 
 function incomingEdges(canvas: Canvas, node: CanvasNode): CanvasEdge[] {
-    const id = nodeId(node);
-    return Array.from(canvas.edges.values()).filter((edge) => {
-        const to = edge.to?.node;
-        if (to === node) return true;
-        if (!to) return false;
-        return (to.id ?? to.getData().id) === id;
-    });
+    return Array.from(canvas.edges.values()).filter((edge) => edge.to?.node === node);
 }
 
 function portalNodes(canvas: Canvas, portalId: string, kind: EmpathyCanvasNodeKind): CanvasNode[] {
@@ -260,12 +229,11 @@ function portalNodes(canvas: Canvas, portalId: string, kind: EmpathyCanvasNodeKi
 function targetNode(canvas: Canvas, edge: CanvasEdge, sourceNode: CanvasNode): CanvasNode {
     const target = edge.to?.node;
     if (!target) {
-        throw new Error(`Unresolved target on edge ${edgeId(edge)} from node ${nodeId(sourceNode)}`);
+        throw new Error(`Unresolved target on edge ${edge.id} from node ${sourceNode.id}`);
     }
-    const targetId = nodeId(target);
-    const canvasTarget = canvas.nodes.get(targetId);
+    const canvasTarget = canvas.nodes.get(target.id);
     if (!canvasTarget) {
-        throw new Error(`Unresolved target ${targetId} from node ${nodeId(sourceNode)}`);
+        throw new Error(`Unresolved target ${target.id} from node ${sourceNode.id}`);
     }
     return canvasTarget;
 }
@@ -318,14 +286,12 @@ export function collectCanvasAtoms(canvas: Canvas): AtomSource[] {
     for (const node of canvas.nodes.values()) {
         const data = node.getData();
         const kind = getEmpathyCanvasNodeKind(data);
-        let id: string;
-        try { id = nodeId(node); } catch { continue; }
         if ((kind === EmpathyCanvasNodeKind.SAY || kind === EmpathyCanvasNodeKind.LINE) && isAuthoredAtom(data.empathyLineAtom)) {
             result.push({
                 ...data.empathyLineAtom,
                 type: AuthoredAtomType.LINE,
                 text: typeof data.text === "string" ? data.text.replace(/\r\n?/g, "\n").trim() : "",
-                nodeId: id,
+                nodeId: node.id,
                 nodeKind: kind,
                 character: kind === EmpathyCanvasNodeKind.SAY && typeof data.empathyCharacter === "string"
                     ? data.empathyCharacter.trim()
@@ -339,7 +305,7 @@ export function collectCanvasAtoms(canvas: Canvas): AtomSource[] {
                     ...value.atom,
                     type: AuthoredAtomType.CHOICE,
                     text: value.text.trim(),
-                    nodeId: id,
+                    nodeId: node.id,
                     nodeKind: kind,
                     optionAtomValue: value.atom.value,
                 });
@@ -350,15 +316,11 @@ export function collectCanvasAtoms(canvas: Canvas): AtomSource[] {
 }
 
 function issueForNode(issues: CanvasIssue[], node: CanvasNode, message: string): void {
-    let id: string | undefined;
-    try { id = nodeId(node); } catch { /* the message below remains useful */ }
-    issues.push({ nodeId: id, message });
+    issues.push({ nodeId: node.id, message });
 }
 
 function issueForEdge(issues: CanvasIssue[], edge: CanvasEdge, message: string): void {
-    let id: string | undefined;
-    try { id = edgeId(edge); } catch { /* the message below remains useful */ }
-    issues.push({ edgeId: id, message });
+    issues.push({ edgeId: edge.id, message });
 }
 
 function validateCondition(
@@ -597,7 +559,7 @@ export function validateCanvas(canvas: Canvas, variables: readonly NarrativeVari
     const variableMap = new Map(variables.map((variable) => [variable.name, variable]));
     const entries = Array.from(canvas.nodes.values())
         .filter((node) => getEmpathyCanvasNodeKind(node.getData()) === EmpathyCanvasNodeKind.ENTRY)
-        .sort((left, right) => stableCompare(nodeId(left), nodeId(right)));
+        .sort((left, right) => left.id < right.id ? -1 : left.id > right.id ? 1 : 0);
     if (entries.length === 0) return [...issues, { message: "Canvas contains no ENTRY node" }];
 
     const queue: CanvasNode[] = [];
@@ -631,11 +593,7 @@ export function validateCanvas(canvas: Canvas, variables: readonly NarrativeVari
     const visited = new Set<string>();
     for (let index = 0; index < queue.length; ++index) {
         const node = queue[index];
-        let id: string;
-        try { id = nodeId(node); } catch (error) {
-            issues.push({ message: error instanceof Error ? error.message : String(error) });
-            continue;
-        }
+        const id = node.id;
         if (visited.has(id)) continue;
         visited.add(id);
         const data = node.getData();
@@ -802,7 +760,7 @@ function emitJump(state: CompileState, target: CanvasNode): void {
     state.writer.u8(EmpathyBytecodeOpcode.JUMP);
     const operandOffset = state.writer.offset;
     state.writer.u64(0n);
-    state.patches.push({ operandOffset, targetNodeId: nodeId(target) });
+    state.patches.push({ operandOffset, targetNodeId: target.id });
 }
 
 function emitLiteral(writer: BytecodeWriter, variable: NarrativeVariable, literal: string): void {
@@ -987,7 +945,7 @@ function compileNode(state: CompileState, node: CanvasNode): void {
         case EmpathyCanvasNodeKind.CHOICE: compileChoice(state, node); return;
         case EmpathyCanvasNodeKind.PORTAL_RECEIVER: compilePortalReceiver(state, node); return;
         case EmpathyCanvasNodeKind.END: state.writer.u8(EmpathyBytecodeOpcode.END); return;
-        default: throw new Error(`Unsupported semantic node ${nodeId(node)}`);
+        default: throw new Error(`Unsupported semantic node ${node.id}`);
     }
 }
 
@@ -1006,7 +964,7 @@ export function compileCanvas(canvas: Canvas, variables: readonly NarrativeVaria
     const { tables, parameters } = deriveParameters(variables);
     const entries = Array.from(canvas.nodes.values())
         .filter((node) => getEmpathyCanvasNodeKind(node.getData()) === EmpathyCanvasNodeKind.ENTRY)
-        .sort((left, right) => stableCompare(nodeId(left), nodeId(right)));
+        .sort((left, right) => left.id < right.id ? -1 : left.id > right.id ? 1 : 0);
     const state: CompileState = {
         canvas,
         writer: new BytecodeWriter(),
@@ -1024,13 +982,13 @@ export function compileCanvas(canvas: Canvas, variables: readonly NarrativeVaria
     const entryTargets = entries.map((entry) => queueTarget(state, outgoingEdges(canvas, entry)[0], entry));
     for (let queueIndex = 0; queueIndex < state.queue.length; ++queueIndex) {
         const node = state.queue[queueIndex];
-        const id = nodeId(node);
+        const id = node.id;
         if (state.nodeOffsets.has(id)) continue;
         state.nodeOffsets.set(id, state.writer.offset);
         compileNode(state, node);
     }
     const entryPoints = entries.map((entry, index) => {
-        const executionOffset = state.nodeOffsets.get(nodeId(entryTargets[index]))!;
+        const executionOffset = state.nodeOffsets.get(entryTargets[index].id)!;
         const condition = entry.getData().empathyEntryCondition;
         if (!condition) return { executionOffset, name: normalizedNodeText(entry) };
         const predicateOffset = state.writer.offset;
