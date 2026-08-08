@@ -3,6 +3,13 @@ import {
     EMPATHY_BYTECODE_VERSION,
     EmpathyBytecodeOpcode,
 } from "./bytecode";
+import {
+    AuthoredAtom,
+    AuthoredAtomType,
+    isAuthoredAtom,
+    isValidAtomKey,
+    isValidAtomValue,
+} from "./atoms";
 
 // Deliberately small approximations of Obsidian's undocumented Canvas runtime objects.
 // These are POC/internal typings, not a supported Canvas API.
@@ -15,7 +22,8 @@ export interface CanvasNodeData {
     empathyAssignments?: NarrativeAssignment[];
     empathyEntryCondition?: NarrativeCondition;
     empathyEntryMatchValue?: string;
-    empathyChoices?: string[];
+    empathyLineAtom?: AuthoredAtom;
+    empathyChoices?: NarrativeChoice[];
     empathyPortalId?: string;
     empathyPortalName?: string;
     [key: string]: unknown;
@@ -32,7 +40,7 @@ export interface CanvasEdgeData {
     empathyCondition?: NarrativeCondition;
     empathyElse?: boolean;
     empathyConditionOrder?: number;
-    empathyChoiceIndex?: number;
+    empathyChoiceAtom?: number;
     [key: string]: unknown;
 }
 
@@ -98,7 +106,13 @@ export interface NarrativeAssignment {
     literal: string;
 }
 
-export interface ParsedVariableName {
+export interface NarrativeChoice {
+    atom: AuthoredAtom;
+    text: string;
+    condition?: NarrativeCondition;
+}
+
+interface ParsedVariableName {
     tableName: string;
     variableName: string;
 }
@@ -107,6 +121,19 @@ export interface CanvasIssue {
     message: string;
     nodeId?: string;
     edgeId?: string;
+}
+
+export interface AtomSource extends AuthoredAtom {
+    type: typeof AuthoredAtomType.LINE | typeof AuthoredAtomType.CHOICE;
+    text: string;
+    nodeId: string;
+    nodeKind: EmpathyCanvasNodeKind;
+    character?: string;
+    optionAtomValue?: number;
+}
+
+interface CompiledAuthoredAtom extends AuthoredAtom {
+    text: string;
 }
 
 interface CompiledParameter extends NarrativeVariable, ParsedVariableName {
@@ -121,9 +148,9 @@ export interface CompileResult {
         predicateOffset?: number;
         name: string;
     }>;
-    lines: readonly string[];
+    lines: readonly CompiledAuthoredAtom[];
     characters: readonly string[];
-    choices: readonly string[];
+    choices: readonly CompiledAuthoredAtom[];
     nodeOffsets: ReadonlyMap<string, number>;
     tables: ReadonlyArray<{ name: string; index: number }>;
     parameters: ReadonlyArray<CompiledParameter>;
@@ -153,12 +180,12 @@ interface CompileState {
     nodeOffsets: Map<string, number>;
     patches: JumpPatch[];
     queue: CanvasNode[];
-    lineIds: Map<string, number>;
     characterIds: Map<string, number>;
-    choiceIds: Map<string, number>;
-    lines: string[];
+    lineValues: Set<number>;
+    choiceValues: Set<number>;
+    lines: CompiledAuthoredAtom[];
     characters: string[];
-    choices: string[];
+    choices: CompiledAuthoredAtom[];
 }
 
 function stableCompare(left: string, right: string): number {
@@ -279,6 +306,49 @@ function isCondition(value: unknown): value is NarrativeCondition {
         typeof condition.literal === "string";
 }
 
+export function isNarrativeChoice(value: unknown): value is NarrativeChoice {
+    if (!value || typeof value !== "object") return false;
+    const choice = value as Partial<NarrativeChoice>;
+    return isAuthoredAtom(choice.atom) && typeof choice.text === "string";
+}
+
+export function collectCanvasAtoms(canvas: Canvas): AtomSource[] {
+    if (!(canvas?.nodes instanceof Map)) return [];
+    const result: AtomSource[] = [];
+    for (const node of canvas.nodes.values()) {
+        const data = node.getData();
+        const kind = getEmpathyCanvasNodeKind(data);
+        let id: string;
+        try { id = nodeId(node); } catch { continue; }
+        if ((kind === EmpathyCanvasNodeKind.SAY || kind === EmpathyCanvasNodeKind.LINE) && isAuthoredAtom(data.empathyLineAtom)) {
+            result.push({
+                ...data.empathyLineAtom,
+                type: AuthoredAtomType.LINE,
+                text: typeof data.text === "string" ? data.text.replace(/\r\n?/g, "\n").trim() : "",
+                nodeId: id,
+                nodeKind: kind,
+                character: kind === EmpathyCanvasNodeKind.SAY && typeof data.empathyCharacter === "string"
+                    ? data.empathyCharacter.trim()
+                    : undefined,
+            });
+        }
+        if (kind === EmpathyCanvasNodeKind.CHOICE && Array.isArray(data.empathyChoices)) {
+            for (const value of data.empathyChoices as unknown[]) {
+                if (!isNarrativeChoice(value)) continue;
+                result.push({
+                    ...value.atom,
+                    type: AuthoredAtomType.CHOICE,
+                    text: value.text.trim(),
+                    nodeId: id,
+                    nodeKind: kind,
+                    optionAtomValue: value.atom.value,
+                });
+            }
+        }
+    }
+    return result;
+}
+
 function issueForNode(issues: CanvasIssue[], node: CanvasNode, message: string): void {
     let id: string | undefined;
     try { id = nodeId(node); } catch { /* the message below remains useful */ }
@@ -296,10 +366,11 @@ function validateCondition(
     variables: ReadonlyMap<string, NarrativeVariable>,
     issues: CanvasIssue[],
     location: CanvasNode | CanvasEdge,
+    prefix = "",
 ): void {
     const report = (message: string): void => {
-        if ("from" in location) issueForEdge(issues, location, message);
-        else issueForNode(issues, location, message);
+        if ("from" in location) issueForEdge(issues, location, `${prefix}${message}`);
+        else issueForNode(issues, location, `${prefix}${message}`);
     };
     if (!isCondition(condition)) {
         report("Condition is incomplete; select a variable, comparison, and literal");
@@ -320,6 +391,56 @@ function validateCondition(
     if (!allowed) report(`Comparison ${condition.comparison} is not valid for ${variable.type} ${variable.name}`);
     if (parsedLiteral(variable, condition.literal) === undefined) {
         report(`Literal ${JSON.stringify(condition.literal)} is not a valid ${variable.type} value for ${variable.name}`);
+    }
+}
+
+function validateAuthoredAtoms(canvas: Canvas, issues: CanvasIssue[]): void {
+    const values = new Map<AtomSource["type"], Map<number, CanvasNode>>([
+        [AuthoredAtomType.LINE, new Map()],
+        [AuthoredAtomType.CHOICE, new Map()],
+    ]);
+    const keys = new Map<AtomSource["type"], Map<string, CanvasNode>>([
+        [AuthoredAtomType.LINE, new Map()],
+        [AuthoredAtomType.CHOICE, new Map()],
+    ]);
+    const validate = (type: AtomSource["type"], atom: unknown, node: CanvasNode, label: string): void => {
+        if (!atom || typeof atom !== "object") {
+            issueForNode(issues, node, `${label} is missing stable ${type.toUpperCase()} atom metadata`);
+            return;
+        }
+        const candidate = atom as Partial<AuthoredAtom>;
+        if (!isValidAtomValue(candidate.value)) {
+            issueForNode(issues, node, `${label} has an invalid ${type.toUpperCase()} atom value`);
+        } else {
+            const owner = values.get(type)!.get(candidate.value);
+            if (owner && owner !== node) {
+                issueForNode(issues, node, `${type.toUpperCase()} atom value ${candidate.value} is duplicated`);
+            } else if (owner === node && type === AuthoredAtomType.CHOICE) {
+                issueForNode(issues, node, `${type.toUpperCase()} atom value ${candidate.value} is duplicated`);
+            } else values.get(type)!.set(candidate.value, node);
+        }
+        if (!isValidAtomKey(candidate.key)) {
+            issueForNode(issues, node, `${label} has an empty or invalid ${type.toUpperCase()} atom key`);
+        } else {
+            const owner = keys.get(type)!.get(candidate.key);
+            if (owner && owner !== node) {
+                issueForNode(issues, node, `${type.toUpperCase()} atom key ${candidate.key} is duplicated`);
+            } else if (owner === node && type === AuthoredAtomType.CHOICE) {
+                issueForNode(issues, node, `${type.toUpperCase()} atom key ${candidate.key} is duplicated`);
+            } else keys.get(type)!.set(candidate.key, node);
+        }
+    };
+    for (const node of canvas.nodes.values()) {
+        const data = node.getData();
+        const kind = getEmpathyCanvasNodeKind(data);
+        if (kind === EmpathyCanvasNodeKind.SAY || kind === EmpathyCanvasNodeKind.LINE) {
+            validate(AuthoredAtomType.LINE, data.empathyLineAtom, node, kind.toUpperCase());
+        } else if (kind === EmpathyCanvasNodeKind.CHOICE && Array.isArray(data.empathyChoices)) {
+            (data.empathyChoices as unknown[]).forEach((choice, index) => {
+                const atom = choice && typeof choice === "object" ? (choice as Partial<NarrativeChoice>).atom : undefined;
+                validate(AuthoredAtomType.CHOICE, atom, node, `CHOICE option ${index}`);
+            });
+        }
     }
 }
 
@@ -460,7 +581,7 @@ function validatePortalReceiver(
     }
     const edge = transmitterEdges[0];
     const edgeData = edge.getData();
-    if (edgeData.empathyCondition !== undefined || edgeData.empathyElse || edgeData.empathyChoiceIndex !== undefined) {
+    if (edgeData.empathyCondition !== undefined || edgeData.empathyElse || edgeData.empathyChoiceAtom !== undefined) {
         issueForEdge(issues, edge, "PORTAL TRANSMITTER continuation must be a normal, unconditional edge");
     }
     const target = validTarget(canvas, edge, transmitter, issues);
@@ -472,6 +593,7 @@ export function validateCanvas(canvas: Canvas, variables: readonly NarrativeVari
     if (!(canvas?.nodes instanceof Map) || !(canvas?.edges instanceof Map)) {
         return [...issues, { message: "Active Canvas runtime does not expose nodes and edges maps" }];
     }
+    validateAuthoredAtoms(canvas, issues);
     const variableMap = new Map(variables.map((variable) => [variable.name, variable]));
     const entries = Array.from(canvas.nodes.values())
         .filter((node) => getEmpathyCanvasNodeKind(node.getData()) === EmpathyCanvasNodeKind.ENTRY)
@@ -583,33 +705,45 @@ export function validateCanvas(canvas: Canvas, variables: readonly NarrativeVari
             }
         } else if (kind === EmpathyCanvasNodeKind.CHOICE) {
             const edges = outgoingEdges(canvas, node);
-            const choices = Array.isArray(data.empathyChoices) ? data.empathyChoices : [];
+            const choices = Array.isArray(data.empathyChoices) ? data.empathyChoices as unknown[] : [];
             if (choices.length === 0) issueForNode(issues, node, "CHOICE must define at least one option");
             choices.forEach((choice, choiceIndex) => {
-                if (typeof choice !== "string" || choice.trim().length === 0) {
+                if (!choice || typeof choice !== "object") {
+                    issueForNode(issues, node, `CHOICE option ${choiceIndex} is missing authored option metadata`);
+                    return;
+                }
+                const option = choice as Partial<NarrativeChoice>;
+                if (typeof option.text !== "string" || option.text.trim().length === 0) {
                     issueForNode(issues, node, `CHOICE option ${choiceIndex} requires non-empty text`);
+                }
+                if (option.condition !== undefined) {
+                    validateCondition(option.condition, variableMap, issues, node, `CHOICE option ${choiceIndex}: `);
                 }
             });
             if (edges.length !== choices.length) {
                 issueForNode(issues, node, `CHOICE must have exactly one edge per option; found ${choices.length} options and ${edges.length} edges`);
             }
-            const orders = new Set<number>();
+            const optionValues = new Set(choices.flatMap((choice) => {
+                const atom = choice && typeof choice === "object" ? (choice as Partial<NarrativeChoice>).atom : undefined;
+                return isValidAtomValue(atom?.value) ? [atom.value] : [];
+            }));
+            const linked = new Set<number>();
             for (const edge of edges) {
                 const edgeData = edge.getData();
-                if (!Number.isInteger(edgeData.empathyChoiceIndex) || (edgeData.empathyChoiceIndex ?? -1) < 0) {
+                if (!isValidAtomValue(edgeData.empathyChoiceAtom)) {
                     issueForEdge(issues, edge, "CHOICE edge is not linked to an option");
-                } else if (edgeData.empathyChoiceIndex! >= choices.length) {
-                    issueForEdge(issues, edge, `CHOICE edge references missing option ${edgeData.empathyChoiceIndex}`);
-                } else if (orders.has(edgeData.empathyChoiceIndex!)) {
-                    issueForEdge(issues, edge, `CHOICE option ${edgeData.empathyChoiceIndex} is linked more than once`);
-                } else orders.add(edgeData.empathyChoiceIndex!);
+                } else if (!optionValues.has(edgeData.empathyChoiceAtom)) {
+                    issueForEdge(issues, edge, `CHOICE edge references missing option atom ${edgeData.empathyChoiceAtom}`);
+                } else if (linked.has(edgeData.empathyChoiceAtom)) {
+                    issueForEdge(issues, edge, `CHOICE option atom ${edgeData.empathyChoiceAtom} is linked more than once`);
+                } else linked.add(edgeData.empathyChoiceAtom);
                 if (edgeData.empathyCondition !== undefined || edgeData.empathyElse) {
                     issueForEdge(issues, edge, "CHOICE option edges cannot also be conditional transitions");
                 }
                 const target = validTarget(canvas, edge, node, issues);
                 if (target) queue.push(target);
             }
-            if (orders.size !== choices.length && edges.length === choices.length) {
+            if (linked.size !== choices.length && edges.length === choices.length) {
                 issueForNode(issues, node, "Every CHOICE option must be linked to exactly one edge");
             }
         } else if (kind === EmpathyCanvasNodeKind.PORTAL_RECEIVER) {
@@ -643,13 +777,19 @@ function deriveParameters(variables: readonly NarrativeVariable[]): {
     return { tables, parameters };
 }
 
-function internAtom(value: string, values: string[], ids: Map<string, number>): number {
+function internCharacter(value: string, values: string[], ids: Map<string, number>): number {
     const existing = ids.get(value);
     if (existing !== undefined) return existing;
     const id = values.length;
     values.push(value);
     ids.set(value, id);
     return id;
+}
+
+function registerAuthoredAtom(atom: AuthoredAtom, text: string, values: CompiledAuthoredAtom[], seen: Set<number>): void {
+    if (seen.has(atom.value)) return;
+    seen.add(atom.value);
+    values.push({ ...atom, text });
 }
 
 function queueTarget(state: CompileState, edge: CanvasEdge, source: CanvasNode): CanvasNode {
@@ -728,10 +868,11 @@ function compileSay(state: CompileState, node: CanvasNode): void {
     const data = node.getData();
     const line = normalizedNodeText(node);
     const character = (data.empathyCharacter as string).trim();
-    const lineId = internAtom(line, state.lines, state.lineIds);
-    const characterId = internAtom(character, state.characters, state.characterIds);
+    const lineAtom = data.empathyLineAtom!;
+    registerAuthoredAtom(lineAtom, line, state.lines, state.lineValues);
+    const characterId = internCharacter(character, state.characters, state.characterIds);
     state.writer.opcode(EmpathyBytecodeOpcode.YIELD_PUSH_ATOM);
-    state.writer.atom(EmpathyPocAtomType.LINE, lineId);
+    state.writer.atom(EmpathyPocAtomType.LINE, lineAtom.value);
     state.writer.opcode(EmpathyBytecodeOpcode.YIELD_PUSH_ATOM);
     state.writer.atom(EmpathyPocAtomType.CHARACTER, characterId);
     state.writer.opcode(EmpathyBytecodeOpcode.YIELD);
@@ -740,9 +881,11 @@ function compileSay(state: CompileState, node: CanvasNode): void {
 }
 
 function compileLine(state: CompileState, node: CanvasNode): void {
-    const lineId = internAtom(normalizedNodeText(node), state.lines, state.lineIds);
+    const line = normalizedNodeText(node);
+    const lineAtom = node.getData().empathyLineAtom!;
+    registerAuthoredAtom(lineAtom, line, state.lines, state.lineValues);
     state.writer.opcode(EmpathyBytecodeOpcode.YIELD_PUSH_ATOM);
-    state.writer.atom(EmpathyPocAtomType.LINE, lineId);
+    state.writer.atom(EmpathyPocAtomType.LINE, lineAtom.value);
     state.writer.opcode(EmpathyBytecodeOpcode.YIELD);
     state.writer.u32(EmpathyPocYieldType.LINE);
     emitTransitions(state, node);
@@ -767,33 +910,61 @@ function compileSet(state: CompileState, node: CanvasNode): void {
 
 function compileChoice(state: CompileState, node: CanvasNode): void {
     const choices = node.getData().empathyChoices!;
-    const edges = outgoingEdges(state.canvas, node)
-        .sort((left, right) => left.getData().empathyChoiceIndex! - right.getData().empathyChoiceIndex!);
-    const targets: CanvasNode[] = [];
-    for (const edge of edges) {
-        const choice = choices[edge.getData().empathyChoiceIndex!]!.trim();
-        const choiceId = internAtom(choice, state.choices, state.choiceIds);
+    const edgesByAtom = new Map(outgoingEdges(state.canvas, node).map((edge) => [edge.getData().empathyChoiceAtom!, edge]));
+    const targets = new Map<number, CanvasNode>();
+    state.writer.opcode(EmpathyBytecodeOpcode.PUSH_U32);
+    state.writer.u32(0);
+    for (const choice of choices) {
+        registerAuthoredAtom(choice.atom, choice.text.trim(), state.choices, state.choiceValues);
+        let skipOffset: number | undefined;
+        if (choice.condition) {
+            emitCondition(state, choice.condition);
+            state.writer.opcode(EmpathyBytecodeOpcode.JUMP_FALSE);
+            skipOffset = state.writer.offset;
+            state.writer.u64(0n);
+        }
         state.writer.opcode(EmpathyBytecodeOpcode.YIELD_PUSH_ATOM);
-        state.writer.atom(EmpathyPocAtomType.CHOICE, choiceId);
-        targets.push(queueTarget(state, edge, node));
+        state.writer.atom(EmpathyPocAtomType.CHOICE, choice.atom.value);
+        state.writer.opcode(EmpathyBytecodeOpcode.PUSH_U32);
+        state.writer.u32(1);
+        state.writer.opcode(EmpathyBytecodeOpcode.ADD);
+        if (skipOffset !== undefined) state.writer.patchU64(skipOffset, state.writer.offset);
+        targets.set(choice.atom.value, queueTarget(state, edgesByAtom.get(choice.atom.value)!, node));
     }
-    state.writer.opcode(EmpathyBytecodeOpcode.YIELD_PUSH_U32);
-    state.writer.u32(edges.length);
+    state.writer.opcode(EmpathyBytecodeOpcode.DUP);
+    state.writer.opcode(EmpathyBytecodeOpcode.PUSH_U32);
+    state.writer.u32(0);
+    state.writer.opcode(EmpathyBytecodeOpcode.EQUAL);
+    state.writer.opcode(EmpathyBytecodeOpcode.JUMP_FALSE);
+    const hasOptionsOffset = state.writer.offset;
+    state.writer.u64(0n);
+    state.writer.opcode(EmpathyBytecodeOpcode.DROP);
+    state.writer.opcode(EmpathyBytecodeOpcode.END);
+    state.writer.patchU64(hasOptionsOffset, state.writer.offset);
+    state.writer.opcode(EmpathyBytecodeOpcode.DROP);
     state.writer.opcode(EmpathyBytecodeOpcode.YIELD);
     state.writer.u32(EmpathyPocYieldType.CHOICE);
     state.writer.opcode(EmpathyBytecodeOpcode.YIELD_TAKE);
-    for (let choiceIndex = 0; choiceIndex < targets.length; ++choiceIndex) {
+    const hiddenChoiceOffsets: number[] = [];
+    for (const choice of choices) {
         state.writer.opcode(EmpathyBytecodeOpcode.DUP);
-        state.writer.opcode(EmpathyBytecodeOpcode.PUSH_U32);
-        state.writer.u32(choiceIndex);
+        state.writer.opcode(EmpathyBytecodeOpcode.PUSH_ATOM);
+        state.writer.atom(EmpathyPocAtomType.CHOICE, choice.atom.value);
         state.writer.opcode(EmpathyBytecodeOpcode.EQUAL);
         state.writer.opcode(EmpathyBytecodeOpcode.JUMP_FALSE);
         const nextComparisonOffset = state.writer.offset;
         state.writer.u64(0n);
+        if (choice.condition) {
+            emitCondition(state, choice.condition);
+            state.writer.opcode(EmpathyBytecodeOpcode.JUMP_FALSE);
+            hiddenChoiceOffsets.push(state.writer.offset);
+            state.writer.u64(0n);
+        }
         state.writer.opcode(EmpathyBytecodeOpcode.DROP);
-        emitJump(state, targets[choiceIndex]);
+        emitJump(state, targets.get(choice.atom.value)!);
         state.writer.patchU64(nextComparisonOffset, state.writer.offset);
     }
+    for (const offset of hiddenChoiceOffsets) state.writer.patchU64(offset, state.writer.offset);
     state.writer.opcode(EmpathyBytecodeOpcode.DROP);
     state.writer.opcode(EmpathyBytecodeOpcode.END);
 }
@@ -843,9 +1014,9 @@ export function compileCanvas(canvas: Canvas, variables: readonly NarrativeVaria
         nodeOffsets: new Map(),
         patches: [],
         queue: [],
-        lineIds: new Map(),
         characterIds: new Map(),
-        choiceIds: new Map(),
+        lineValues: new Set(),
+        choiceValues: new Set(),
         lines: [],
         characters: [],
         choices: [],
@@ -878,9 +1049,9 @@ export function compileCanvas(canvas: Canvas, variables: readonly NarrativeVaria
     return {
         bytecode: state.writer.finish(),
         entryPoints,
-        lines: state.lines,
+        lines: state.lines.sort((left, right) => left.value - right.value),
         characters: state.characters,
-        choices: state.choices,
+        choices: state.choices.sort((left, right) => left.value - right.value),
         nodeOffsets: state.nodeOffsets,
         tables,
         parameters,
@@ -940,15 +1111,46 @@ function stringTable(symbol: string, values: readonly string[]): string[] {
     ];
 }
 
+function authoredAtomTable(typeName: string, symbol: string, values: readonly CompiledAuthoredAtom[]): string[] {
+    return [
+        `static const ${typeName} ${symbol}[] =`,
+        "{",
+        ...(values.length > 0
+            ? values.map((atom) => `    {${atom.value}u, ${cString(atom.key)}, ${cString(atom.text)}},`)
+            : ["    {0u, 0, 0},"]),
+        "};",
+    ];
+}
+
 function atomRange(count: number): { min: number; max: number } {
     return count === 0 ? { min: 1, max: 0 } : { min: 0, max: count - 1 };
 }
 
+function authoredAtomRange(values: readonly CompiledAuthoredAtom[]): { min: number; max: number } {
+    if (values.length === 0) return { min: 1, max: 0 };
+    return {
+        min: Math.min(...values.map(({ value }) => value)),
+        max: Math.max(...values.map(({ value }) => value)),
+    };
+}
+
+function authoredAtomConstants(
+    macro: string,
+    kind: "LINE" | "CHOICE",
+    values: readonly CompiledAuthoredAtom[],
+): Map<number, string> {
+    const used = new Set<string>();
+    return new Map(values.map((atom) => [
+        atom.value,
+        uniqueName(`${macro}_${kind}_${cIdentifier(atom.key, `${kind}_${atom.value}`).toUpperCase()}`, used),
+    ]));
+}
+
 export function generateHeader(result: CompileResult, sourceName: string): string {
     const { macro, symbol } = generatedName(sourceName);
-    const lineRange = atomRange(result.lines.length);
+    const lineRange = authoredAtomRange(result.lines);
     const characterRange = atomRange(result.characters.length);
-    const choiceRange = atomRange(result.choices.length);
+    const choiceRange = authoredAtomRange(result.choices);
     const usedTypes = new Set<string>();
     const tableTypes = new Map(result.tables.map((table) => [table.name, uniqueName(cTypeName(table.name), usedTypes)]));
     const tableConstants = new Map<string, string>();
@@ -960,6 +1162,8 @@ export function generateHeader(result: CompileResult, sourceName: string): strin
     const usedParameterConstants = new Set<string>();
     const fields = new Map<string, string>();
     const fieldsByTable = new Map<string, Set<string>>();
+    const lineConstants = authoredAtomConstants(macro, "LINE", result.lines);
+    const choiceConstants = authoredAtomConstants(macro, "CHOICE", result.choices);
     for (const parameter of result.parameters) {
         const tableFields = fieldsByTable.get(parameter.tableName) ?? new Set<string>();
         fieldsByTable.set(parameter.tableName, tableFields);
@@ -1004,6 +1208,13 @@ export function generateHeader(result: CompileResult, sourceName: string): strin
         `    ${macro}_YIELD_TYPE_SAY = ${EmpathyPocYieldType.SAY},`,
         `} ${macro}_YieldType;`,
         "",
+        `typedef struct ${macro}_AtomText_t`,
+        "{",
+        "    uint32_t value;",
+        "    const char *key;",
+        "    const char *text;",
+        `} ${macro}_AtomText;`,
+        "",
     ];
     if (result.tables.length > 0) {
         lines.push(`typedef enum ${macro}_ParameterTable_t`, "{");
@@ -1034,10 +1245,18 @@ export function generateHeader(result: CompileResult, sourceName: string): strin
         `#define ${macro}_BYTECODE_SIZE ${result.bytecode.length}u`,
         "",
     );
-    for (let id = 0; id < result.lines.length; ++id) lines.push(`#define ${macro}_LINE_${id} ${id}u`);
+    for (const atom of result.lines) lines.push(`#define ${lineConstants.get(atom.value)} ${atom.value}u`);
     for (let id = 0; id < result.characters.length; ++id) lines.push(`#define ${macro}_CHARACTER_${id} ${id}u`);
-    for (let id = 0; id < result.choices.length; ++id) lines.push(`#define ${macro}_CHOICE_${id} ${id}u`);
-    lines.push("", ...stringTable(`${symbol}_line_strings`, result.lines), "", ...stringTable(`${symbol}_character_strings`, result.characters), "", ...stringTable(`${symbol}_choice_strings`, result.choices), "");
+    for (const atom of result.choices) lines.push(`#define ${choiceConstants.get(atom.value)} ${atom.value}u`);
+    lines.push(
+        "",
+        ...authoredAtomTable(`${macro}_AtomText`, `${symbol}_line_atoms`, result.lines),
+        "",
+        ...stringTable(`${symbol}_character_strings`, result.characters),
+        "",
+        ...authoredAtomTable(`${macro}_AtomText`, `${symbol}_choice_atoms`, result.choices),
+        "",
+    );
     lines.push(
         `static const Empathy_AtomTypeDesc ${symbol}_atom_types[] =`,
         "{",
@@ -1059,7 +1278,7 @@ export function generateHeader(result: CompileResult, sourceName: string): strin
     lines.push(
         `static const Empathy_ValueType ${symbol}_choice_resume_types[] =`,
         "{",
-        "    {EMPATHY_VALUE_BASE_TYPE_UINT32, 0u},",
+        `    {EMPATHY_VALUE_BASE_TYPE_ATOM, ${macro}_ATOM_TYPE_CHOICE},`,
         "};",
         "",
         `static const Empathy_YieldDesc ${symbol}_yields[] =`,

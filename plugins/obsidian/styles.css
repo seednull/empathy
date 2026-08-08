@@ -383,9 +383,46 @@
 
 .empathy-choice-row {
     display: grid;
-    grid-template-columns: 18px minmax(90px, 1fr) 16px 24px 24px 24px;
+    grid-template-columns: 18px minmax(90px, 1fr) 16px 24px 24px 42px 24px;
     align-items: center;
     gap: 4px;
+}
+
+.empathy-choice-condition-toggle {
+    width: 40px !important;
+    color: var(--text-muted);
+    font-size: 10px !important;
+}
+
+.empathy-choice-condition-toggle.is-active {
+    border-color: color-mix(in srgb, var(--color-purple) 65%, var(--background-modifier-border));
+    color: var(--color-purple);
+}
+
+.empathy-choice-condition-row {
+    display: grid;
+    grid-template-columns: 42px minmax(0, 1fr) 24px;
+    align-items: center;
+    gap: 5px;
+    padding: 2px 0 5px 18px;
+    color: var(--color-purple);
+}
+
+.empathy-choice-condition-row > div,
+.empathy-choice-condition-row .empathy-condition-controls {
+    min-width: 0;
+}
+
+.empathy-choice-condition-row > button {
+    width: 22px;
+    height: 22px;
+    padding: 0;
+}
+
+.empathy-choice-source-focus {
+    border-radius: var(--radius-s);
+    background: color-mix(in srgb, var(--color-orange) 24%, transparent);
+    outline: 2px solid var(--color-orange);
 }
 
 .empathy-choice-row > input {
@@ -542,6 +579,121 @@
 
 .empathy-panel-section-heading {
     margin-bottom: 13px;
+}
+
+.empathy-atoms-section {
+    margin-top: 24px;
+    padding-top: 18px;
+    border-top: 1px solid var(--background-modifier-border);
+}
+
+.empathy-atom-search {
+    width: 100%;
+    margin-bottom: 14px;
+}
+
+.empathy-atom-group {
+    margin-bottom: 18px;
+}
+
+.empathy-atom-group > h4 {
+    margin: 0 0 7px;
+    color: var(--text-muted);
+    font-size: var(--font-ui-small);
+    font-weight: var(--font-semibold);
+}
+
+.empathy-atom-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 4px 8px;
+    padding: 8px 0;
+    border-top: 1px solid var(--background-modifier-border-hover);
+}
+
+.empathy-atom-identity {
+    display: grid;
+    min-width: 0;
+    grid-template-columns: 54px minmax(0, 1fr);
+    align-items: center;
+    gap: 7px;
+}
+
+.empathy-atom-identity > code {
+    overflow: hidden;
+    color: var(--text-muted);
+    font-size: var(--font-ui-smaller);
+    text-overflow: ellipsis;
+}
+
+.empathy-atom-identity > input {
+    width: 100%;
+    min-width: 0;
+    font-family: var(--font-monospace);
+}
+
+.empathy-atom-text,
+.empathy-atom-source {
+    grid-column: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.empathy-atom-text {
+    color: var(--text-normal);
+    font-size: var(--font-ui-smaller);
+    white-space: nowrap;
+}
+
+.empathy-atom-source {
+    color: var(--text-muted);
+    font-size: var(--font-ui-smaller);
+}
+
+.empathy-atom-actions {
+    display: flex;
+    grid-column: 2;
+    grid-row: 1 / span 3;
+    align-items: center;
+    gap: 2px;
+}
+
+.empathy-atom-actions > button {
+    width: 25px;
+    height: 25px;
+    padding: 4px;
+}
+
+.empathy-atom-actions svg {
+    width: 14px;
+    height: 14px;
+}
+
+.empathy-atom-error {
+    grid-column: 1 / -1;
+    color: var(--text-error);
+    font-size: var(--font-ui-smaller);
+}
+
+.empathy-atom-error:empty {
+    display: none;
+}
+
+.empathy-atom-row.is-invalid input {
+    border-color: var(--color-red);
+}
+
+.empathy-atoms-empty {
+    padding: 10px;
+    border: 1px dashed var(--background-modifier-border);
+    border-radius: var(--radius-s);
+    color: var(--text-muted);
+    font-size: var(--font-ui-smaller);
+    text-align: center;
+}
+
+.empathy-canvas-source-focus > .canvas-node-container {
+    box-shadow: 0 0 0 3px var(--interactive-accent), 0 0 0 7px color-mix(in srgb, var(--interactive-accent) 25%, transparent);
 }
 
 .empathy-panel-section-heading > h3 {

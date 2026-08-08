@@ -1,16 +1,29 @@
 import type { EventRef, Menu, Plugin } from "obsidian";
 
 import {
+    AuthoredAtom,
+    AuthoredAtomType,
+    isAuthoredAtom,
+    isValidAtomKey,
+    suggestedAtomKey,
+    uniqueAtomKey,
+} from "./atoms";
+
+import {
     Canvas,
     CanvasEdge,
     CanvasEdgeData,
     CanvasNode,
     CanvasNodeData,
+    collectCanvasAtoms,
     EmpathyCanvasNodeKind,
     getEmpathyCanvasNodeKind,
+    isNarrativeChoice,
+    AtomSource,
     NarrativeAssignment,
     NarrativeComparison,
     NarrativeCondition,
+    NarrativeChoice,
     NarrativeVariable,
     NarrativeVariableAccess,
     NarrativeVariableType,
@@ -28,6 +41,8 @@ interface CanvasUi {
     showNotice(message: string): void;
     getVariables(): readonly NarrativeVariable[];
     openPanel(selectCreated?: (variable: NarrativeVariable) => void): void;
+    allocateAtom: CanvasAtomAllocator;
+    atomsChanged(): void;
 }
 
 interface RuntimeCanvasNode extends CanvasNode {
@@ -76,6 +91,7 @@ interface RuntimeCanvas extends Canvas {
     importData(data: { nodes: CanvasNodeData[]; edges: CanvasEdgeData[] }, clearMissing: boolean): void;
     setReadonly(readonly: boolean): void;
     showCreationMenu(menu: Menu, pos: CanvasPoint, size?: CanvasSize): void;
+    zoomToSelection(): void;
 }
 
 interface NodePatch {
@@ -102,10 +118,11 @@ interface CanvasPatch {
     validationTimer?: ReturnType<typeof setTimeout>;
     resizeSaveTimer?: ReturnType<typeof setTimeout>;
     restore: Array<() => void>;
+    knownNodeIds: Set<string>;
 }
 
 const requiredCanvasMethods = [
-    "createTextNode", "posCenter", "selectOnly", "markDirty", "requestSave", "importData", "setReadonly", "showCreationMenu",
+    "createTextNode", "posCenter", "selectOnly", "zoomToSelection", "markDirty", "requestSave", "importData", "setReadonly", "showCreationMenu",
 ] as const;
 
 const nodeLabels: Record<EmpathyCanvasNodeKind, string> = {
@@ -139,6 +156,14 @@ const headerOnlyNodeKinds = new Set<EmpathyCanvasNodeKind>([
     EmpathyCanvasNodeKind.PORTAL_TRANSMITTER,
     EmpathyCanvasNodeKind.END,
 ]);
+const nodeFocusSelectors: Partial<Record<EmpathyCanvasNodeKind, string>> = {
+    [EmpathyCanvasNodeKind.SAY]: ".empathy-canvas-character-input",
+    [EmpathyCanvasNodeKind.ENTRY]: ".empathy-canvas-entry-input",
+    [EmpathyCanvasNodeKind.CHOICE]: ".empathy-choice-row input, .empathy-choice-add",
+    [EmpathyCanvasNodeKind.SET]: ".empathy-variable-picker input",
+    [EmpathyCanvasNodeKind.PORTAL_RECEIVER]: ".empathy-canvas-portal-select",
+    [EmpathyCanvasNodeKind.PORTAL_TRANSMITTER]: ".empathy-canvas-portal-input",
+};
 const creationNodeKinds: readonly EmpathyCanvasNodeKind[] = [
     EmpathyCanvasNodeKind.ENTRY,
     EmpathyCanvasNodeKind.SAY,
@@ -158,10 +183,10 @@ const convertibleNodeKinds: readonly EmpathyCanvasNodeKind[] = [
     EmpathyCanvasNodeKind.END,
 ];
 const nodeSemanticKeys = [
-    "empathyCharacter", "empathyAssignments", "empathyEntryCondition", "empathyEntryMatchValue", "empathyChoices",
+    "empathyCharacter", "empathyAssignments", "empathyEntryCondition", "empathyEntryMatchValue", "empathyLineAtom", "empathyChoices",
     "empathyPortalId", "empathyPortalName",
 ] as const;
-const edgeSemanticKeys = ["empathyCondition", "empathyElse", "empathyConditionOrder", "empathyChoiceIndex"] as const;
+const edgeSemanticKeys = ["empathyCondition", "empathyElse", "empathyConditionOrder", "empathyChoiceAtom"] as const;
 
 function initialText(kind: EmpathyCanvasNodeKind): string {
     if (kind === EmpathyCanvasNodeKind.SAY) return "Dialogue";
@@ -265,10 +290,103 @@ export function formatTransitionBadge(data: CanvasEdgeData): string | undefined 
     return `if ${condition.variable} ${comparisons[condition.comparison]} ${condition.literal}`;
 }
 
-export function formatChoiceBadge(data: CanvasEdgeData, choices: readonly string[]): string {
-    const index = data.empathyChoiceIndex;
-    const choice = Number.isInteger(index) ? choices[index!] : undefined;
-    return choice?.trim() || "Unlinked choice";
+export function formatChoiceBadge(data: CanvasEdgeData, choices: readonly NarrativeChoice[]): string {
+    const choice = choices.find((option) => isAuthoredAtom(option?.atom) && option.atom.value === data.empathyChoiceAtom);
+    return choice?.text.trim() || "Unlinked choice";
+}
+
+type CanvasAtomAllocator = (
+    type: AuthoredAtomType,
+    text: string,
+    character: string | undefined,
+    usedValues: ReadonlySet<number>,
+    usedKeys: ReadonlySet<string>,
+) => AuthoredAtom;
+
+function mutableNode(node: CanvasNode): CanvasNode & { setData(data: CanvasNodeData): void } {
+    const candidate = node as CanvasNode & { setData?: (data: CanvasNodeData) => void };
+    if (typeof candidate.setData !== "function") throw new Error("Canvas node does not expose setData for atom repair");
+    return candidate as CanvasNode & { setData(data: CanvasNodeData): void };
+}
+
+function mutableEdge(edge: CanvasEdge): CanvasEdge & { setData(data: CanvasEdgeData): void } {
+    const candidate = edge as CanvasEdge & { setData?: (data: CanvasEdgeData) => void };
+    if (typeof candidate.setData !== "function") throw new Error("Canvas edge does not expose setData for atom repair");
+    return candidate as CanvasEdge & { setData(data: CanvasEdgeData): void };
+}
+
+function canvasNodeId(node: CanvasNode): string | undefined {
+    const id = node.id ?? node.getData().id;
+    return typeof id === "string" && id.length > 0 ? id : undefined;
+}
+
+function usedAtomSets(canvas: Canvas, type: AtomSource["type"], nodeIds?: ReadonlySet<string>): {
+    values: Set<number>;
+    keys: Set<string>;
+} {
+    const sources = collectCanvasAtoms(canvas).filter((source) =>
+        source.type === type && (nodeIds === undefined || nodeIds.has(source.nodeId)));
+    return {
+        values: new Set(sources.map(({ value }) => value)),
+        keys: new Set(sources.map(({ key }) => key)),
+    };
+}
+
+export function repairDuplicatedNodeAtoms(
+    canvas: Canvas,
+    node: CanvasNode,
+    knownNodeIds: ReadonlySet<string>,
+    allocate: CanvasAtomAllocator,
+): boolean {
+    const data = node.getData();
+    const kind = getEmpathyCanvasNodeKind(data);
+    const lineUsed = usedAtomSets(canvas, AuthoredAtomType.LINE, knownNodeIds);
+    const choiceUsed = usedAtomSets(canvas, AuthoredAtomType.CHOICE, knownNodeIds);
+    let changed = false;
+    let nextData = data;
+    if (
+        (kind === EmpathyCanvasNodeKind.SAY || kind === EmpathyCanvasNodeKind.LINE) &&
+        isAuthoredAtom(data.empathyLineAtom) &&
+        (lineUsed.values.has(data.empathyLineAtom.value) || lineUsed.keys.has(data.empathyLineAtom.key))
+    ) {
+        const atom = allocate(
+            AuthoredAtomType.LINE,
+            typeof data.text === "string" ? data.text : "",
+            kind === EmpathyCanvasNodeKind.SAY && typeof data.empathyCharacter === "string" ? data.empathyCharacter : undefined,
+            lineUsed.values,
+            lineUsed.keys,
+        );
+        nextData = { ...nextData, empathyLineAtom: atom };
+        changed = true;
+    }
+    const choiceRemap = new Map<number, number>();
+    if (kind === EmpathyCanvasNodeKind.CHOICE && Array.isArray(data.empathyChoices)) {
+        const choices = data.empathyChoices.map((option) => {
+            if (!isAuthoredAtom(option.atom)) return option;
+            if (!choiceUsed.values.has(option.atom.value) && !choiceUsed.keys.has(option.atom.key)) {
+                choiceUsed.values.add(option.atom.value);
+                choiceUsed.keys.add(option.atom.key);
+                return option;
+            }
+            const atom = allocate(AuthoredAtomType.CHOICE, option.text, undefined, choiceUsed.values, choiceUsed.keys);
+            choiceUsed.values.add(atom.value);
+            choiceUsed.keys.add(atom.key);
+            choiceRemap.set(option.atom.value, atom.value);
+            changed = true;
+            return { ...option, atom };
+        });
+        if (changed) nextData = { ...nextData, empathyChoices: choices };
+    }
+    if (!changed) return false;
+    mutableNode(node).setData(nextData);
+    for (const edge of canvas.edges.values()) {
+        const source = edge.from?.node;
+        if (!source || (source !== node && canvasNodeId(source) !== canvasNodeId(node))) continue;
+        const replacement = choiceRemap.get(edge.getData().empathyChoiceAtom!);
+        if (replacement === undefined) continue;
+        mutableEdge(edge).setData({ ...edge.getData(), empathyChoiceAtom: replacement });
+    }
+    return true;
 }
 
 export class EmpathyCanvasIntegration {
@@ -307,6 +425,78 @@ export class EmpathyCanvasIntegration {
         }
     }
 
+    atomSources(canvas: Canvas): AtomSource[] {
+        this.patchCanvas(canvas);
+        return collectCanvasAtoms(canvas).sort((left, right) =>
+            left.type.localeCompare(right.type) || left.value - right.value || left.key.localeCompare(right.key));
+    }
+
+    renameAtomKey(canvas: Canvas, source: AtomSource, key: string): string | undefined {
+        if (!isValidAtomKey(key)) return "Use lowercase letters, numbers, underscores, and optional dot-separated segments.";
+        const duplicate = collectCanvasAtoms(canvas).find((candidate) =>
+            candidate.type === source.type && candidate.key === key &&
+            (candidate.nodeId !== source.nodeId || candidate.value !== source.value));
+        if (duplicate) return `${source.type.toUpperCase()} key ${key} already exists.`;
+        if (!this.updateAtom(canvas, source, { value: source.value, key })) return "The atom source is no longer available.";
+        return undefined;
+    }
+
+    regenerateAtomKey(canvas: Canvas, source: AtomSource): string | undefined {
+        const current = collectCanvasAtoms(canvas).find((candidate) =>
+            candidate.type === source.type && candidate.value === source.value && candidate.nodeId === source.nodeId);
+        if (!current) return "The atom source is no longer available.";
+        const used = new Set(collectCanvasAtoms(canvas)
+            .filter((candidate) => candidate.type === source.type &&
+                (candidate.nodeId !== source.nodeId || candidate.value !== source.value))
+            .map(({ key }) => key));
+        const base = suggestedAtomKey(source.type, current.text, current.character);
+        const key = uniqueAtomKey(base, `${source.type}_${source.value}`, used);
+        if (!this.updateAtom(canvas, current, { value: current.value, key })) return "The atom source is no longer available.";
+        return undefined;
+    }
+
+    goToAtomSource(canvas: Canvas, source: AtomSource): boolean {
+        const runtime = this.patchCanvas(canvas);
+        const node = runtime.nodes.get(source.nodeId) as RuntimeCanvasNode | undefined;
+        if (!node) return false;
+        runtime.selectOnly(node);
+        runtime.zoomToSelection();
+        node.nodeEl.classList.add("empathy-canvas-source-focus");
+        setTimeout(() => node.nodeEl.classList.remove("empathy-canvas-source-focus"), 1400);
+        if (source.type === AuthoredAtomType.CHOICE) {
+            const row = node.nodeEl.querySelector<HTMLElement>(`[data-empathy-choice-atom="${source.value}"]`);
+            row?.classList.add("empathy-choice-source-focus");
+            row?.focus({ preventScroll: true });
+            setTimeout(() => row?.classList.remove("empathy-choice-source-focus"), 1400);
+        }
+        return true;
+    }
+
+    private updateAtom(canvas: Canvas, source: AtomSource, atom: AuthoredAtom): boolean {
+        const runtime = this.patchCanvas(canvas);
+        const node = runtime.nodes.get(source.nodeId) as RuntimeCanvasNode | undefined;
+        if (!node || runtime.readonly) return false;
+        const data = node.getData();
+        if (source.type === AuthoredAtomType.LINE) {
+            if (data.empathyLineAtom?.value !== source.value) return false;
+            node.setData({ ...data, empathyLineAtom: atom });
+        } else {
+            if (!Array.isArray(data.empathyChoices)) return false;
+            let found = false;
+            const choices = data.empathyChoices.map((choice) => {
+                if (!isNarrativeChoice(choice)) return choice;
+                if (choice.atom.value !== source.value) return choice;
+                found = true;
+                return { ...choice, atom };
+            });
+            if (!found) return false;
+            node.setData({ ...data, empathyChoices: choices });
+        }
+        runtime.markDirty(node);
+        runtime.requestSave();
+        return true;
+    }
+
     variableUsageCount(name: string): number {
         let count = 0;
         for (const patch of this.patches.values()) {
@@ -316,6 +506,9 @@ export class EmpathyCanvasIntegration {
                     if (assignment.variable === name) ++count;
                 }
                 if (data.empathyEntryCondition?.variable === name) ++count;
+                for (const choice of data.empathyChoices ?? []) {
+                    if (choice.condition?.variable === name) ++count;
+                }
             }
             for (const edge of patch.canvas.edges.values()) {
                 if (edge.getData().empathyCondition?.variable === name) ++count;
@@ -329,10 +522,14 @@ export class EmpathyCanvasIntegration {
         const runtime = requireCanvasRuntime(canvas);
         const existing = this.patches.get(runtime);
         if (existing) {
-            this.syncNodes(existing);
+            const repaired = this.syncNodes(existing);
             this.syncToolbar(existing);
             this.syncEdgeToolbar(existing);
             this.scheduleValidation(existing);
+            if (repaired) {
+                for (const edge of runtime.edges.values() as IterableIterator<RuntimeCanvasEdge>) runtime.markDirty(edge);
+                runtime.requestSave();
+            }
             return runtime;
         }
         const patch: CanvasPatch = {
@@ -340,6 +537,7 @@ export class EmpathyCanvasIntegration {
             nodes: new Map(),
             edgeBadges: new Map(),
             restore: [],
+            knownNodeIds: new Set(Array.from(runtime.nodes.values(), (node) => canvasNodeId(node)).filter((id): id is string => Boolean(id))),
         };
         this.patches.set(runtime, patch);
         const originalRequestSave = runtime.requestSave;
@@ -351,11 +549,15 @@ export class EmpathyCanvasIntegration {
                 clearTimeout(patch.resizeSaveTimer);
                 patch.resizeSaveTimer = undefined;
             }
-            originalRequestSave.call(runtime, pushHistory);
             if (!this.disposed) {
-                this.syncNodes(patch);
+                const repaired = this.syncNodes(patch);
+                if (repaired) {
+                    for (const edge of runtime.edges.values() as IterableIterator<RuntimeCanvasEdge>) runtime.markDirty(edge);
+                }
                 this.scheduleValidation(patch);
             }
+            originalRequestSave.call(runtime, pushHistory);
+            if (!this.disposed) this.ui.atomsChanged();
         };
         const wrappedShowCreationMenu: RuntimeCanvas["showCreationMenu"] = (menu, pos, size) => {
             if (!this.disposed && !runtime.readonly) {
@@ -418,12 +620,8 @@ export class EmpathyCanvasIntegration {
         runtime.selectOnly(node);
         runtime.markDirty(node);
         runtime.requestSave();
-        if (kind === EmpathyCanvasNodeKind.SAY) this.focusCharacterField(node);
-        else if (kind === EmpathyCanvasNodeKind.LINE) node.startEditing();
-        else if (kind === EmpathyCanvasNodeKind.ENTRY) this.focusEntryName(node);
-        else if (kind === EmpathyCanvasNodeKind.SET) this.focusVariablePicker(node);
-        else if (kind === EmpathyCanvasNodeKind.PORTAL_RECEIVER) this.focusPortalReceiver(node);
-        else if (kind === EmpathyCanvasNodeKind.PORTAL_TRANSMITTER) this.focusPortalName(node);
+        if (kind === EmpathyCanvasNodeKind.LINE) node.startEditing();
+        else this.focusNodeControl(node, kind);
         return node;
     }
 
@@ -435,6 +633,15 @@ export class EmpathyCanvasIntegration {
         centered: boolean,
         metadata: Partial<CanvasNodeData> = {},
     ): RuntimeCanvasNode {
+        const defaults = semanticDefaults(kind);
+        const lineAtom = kind === EmpathyCanvasNodeKind.SAY || kind === EmpathyCanvasNodeKind.LINE
+            ? this.allocateForCanvas(
+                runtime,
+                AuthoredAtomType.LINE,
+                initialText(kind),
+                kind === EmpathyCanvasNodeKind.SAY ? String(defaults.empathyCharacter ?? "") : undefined,
+            )
+            : undefined;
         const node = runtime.createTextNode({
             pos,
             size,
@@ -448,12 +655,23 @@ export class EmpathyCanvasIntegration {
             type: "text",
             text: initialText(kind),
             empathyKind: kind,
-            ...semanticDefaults(kind),
+            ...defaults,
+            ...(lineAtom ? { empathyLineAtom: lineAtom } : {}),
             ...metadata,
         });
         node.attach();
         node.render();
         return node;
+    }
+
+    private allocateForCanvas(
+        canvas: Canvas,
+        type: AtomSource["type"],
+        text: string,
+        character?: string,
+    ): AuthoredAtom {
+        const used = usedAtomSets(canvas, type);
+        return this.ui.allocateAtom(type, text, character, used.values, used.keys);
     }
 
     private newPortalId(canvas: RuntimeCanvas): string {
@@ -562,7 +780,7 @@ export class EmpathyCanvasIntegration {
             data.empathyCondition,
             data.empathyElse,
             data.empathyConditionOrder,
-            data.empathyChoiceIndex,
+            data.empathyChoiceAtom,
             anotherElse,
         ]);
     }
@@ -585,12 +803,12 @@ export class EmpathyCanvasIntegration {
         };
         if (sourceKind === EmpathyCanvasNodeKind.CHOICE) {
             append(
-                data.empathyChoiceIndex === undefined ? "Link Empathy choice" : "Change linked Empathy choice",
+                data.empathyChoiceAtom === undefined ? "Link Empathy choice" : "Change linked Empathy choice",
                 "list-ordered",
                 "choice",
                 () => this.openEdgeEditor(patch, edge, "choice"),
             );
-            append("Unlink Empathy choice", "unlink", "clear", () => this.clearChoiceEdge(patch, edge), data.empathyChoiceIndex === undefined);
+            append("Unlink Empathy choice", "unlink", "clear", () => this.clearChoiceEdge(patch, edge), data.empathyChoiceAtom === undefined);
             return buttons;
         }
         append(
@@ -813,12 +1031,30 @@ export class EmpathyCanvasIntegration {
         for (const canvas of this.patches.keys()) if (!live.has(canvas)) this.unpatchCanvas(canvas);
     }
 
-    private syncNodes(patch: CanvasPatch): void {
+    private syncNodes(patch: CanvasPatch): boolean {
         const live = new Set(Array.from(patch.canvas.nodes.values()) as RuntimeCanvasNode[]);
         for (const node of patch.nodes.keys()) {
             if (!live.has(node)) this.unpatchNode(patch, node);
         }
-        for (const node of live) this.patchNode(patch, node);
+        let repaired = false;
+        for (const node of live) {
+            const id = canvasNodeId(node);
+            if (id && !patch.knownNodeIds.has(id) && !patch.canvas.readonly) {
+                const nodeRepaired = repairDuplicatedNodeAtoms(
+                    patch.canvas,
+                    node,
+                    patch.knownNodeIds,
+                    (...args) => this.ui.allocateAtom(...args),
+                );
+                repaired ||= nodeRepaired;
+                patch.knownNodeIds.add(id);
+                if (nodeRepaired) patch.canvas.markDirty(node);
+            }
+            this.patchNode(patch, node);
+        }
+        const liveIds = new Set(Array.from(live, (node) => canvasNodeId(node)).filter((id): id is string => Boolean(id)));
+        for (const id of patch.knownNodeIds) if (!liveIds.has(id)) patch.knownNodeIds.delete(id);
+        return repaired;
     }
 
     private patchNode(patch: CanvasPatch, node: RuntimeCanvasNode): void {
@@ -842,7 +1078,7 @@ export class EmpathyCanvasIntegration {
         const wrappedSetIsEditing: RuntimeCanvasNode["setIsEditing"] = (editing, ...args) => {
             const kind = getEmpathyCanvasNodeKind(node.getData());
             if (editing && kind && headerOnlyNodeKinds.has(kind)) {
-                this.focusHeaderControl(node, kind);
+                this.focusNodeControl(node, kind);
                 return;
             }
             originalSetIsEditing.call(node, editing, ...args);
@@ -851,7 +1087,7 @@ export class EmpathyCanvasIntegration {
         const wrappedStartEditing: RuntimeCanvasNode["startEditing"] = () => {
             const kind = getEmpathyCanvasNodeKind(node.getData());
             if (kind && headerOnlyNodeKinds.has(kind)) {
-                this.focusHeaderControl(node, kind);
+                this.focusNodeControl(node, kind);
                 return;
             }
             originalStartEditing.call(node);
@@ -876,7 +1112,7 @@ export class EmpathyCanvasIntegration {
     private nodeSignature(node: RuntimeCanvasNode, kind: EmpathyCanvasNodeKind, data: CanvasNodeData): string {
         switch (kind) {
             case EmpathyCanvasNodeKind.CHOICE:
-                return JSON.stringify([kind, data.empathyChoices, ...this.outgoingRuntimeEdges(node.canvas, node).map((edge) => edge.getData().empathyChoiceIndex)]);
+                return JSON.stringify([kind, data.empathyChoices, ...this.outgoingRuntimeEdges(node.canvas, node).map((edge) => edge.getData().empathyChoiceAtom)]);
             case EmpathyCanvasNodeKind.SET:
                 return JSON.stringify([kind, data.empathyAssignments]);
             case EmpathyCanvasNodeKind.ENTRY:
@@ -1259,20 +1495,23 @@ export class EmpathyCanvasIntegration {
     private addChoiceControls(patch: CanvasPatch, node: RuntimeCanvasNode, header: HTMLElement, data: CanvasNodeData): void {
         const controls = header.ownerDocument.createElement("div");
         controls.className = "empathy-node-controls empathy-choice-controls";
-        const choices = Array.isArray(data.empathyChoices) ? data.empathyChoices : [];
+        const choices = Array.isArray(data.empathyChoices) ? data.empathyChoices.filter(isNarrativeChoice) : [];
         const edges = this.outgoingRuntimeEdges(node.canvas, node);
         for (let index = 0; index < choices.length; ++index) {
+            const choice = choices[index];
             const row = header.ownerDocument.createElement("div");
             row.className = "empathy-choice-row";
+            row.dataset.empathyChoiceAtom = String(choice.atom.value);
+            row.tabIndex = -1;
             const order = header.ownerDocument.createElement("span");
-            order.textContent = String(index);
+            order.textContent = String(index + 1);
             const text = header.ownerDocument.createElement("input");
             text.type = "text";
-            text.value = typeof choices[index] === "string" ? choices[index] : "";
+            text.value = choice.text;
             text.placeholder = "Choice text";
-            text.addEventListener("change", () => this.renameChoice(node, index, text.value));
+            text.addEventListener("change", () => this.updateChoice(node, choice.atom.value, { text: text.value }));
             const connection = header.ownerDocument.createElement("span");
-            const linked = edges.some((edge) => edge.getData().empathyChoiceIndex === index);
+            const linked = edges.some((edge) => edge.getData().empathyChoiceAtom === choice.atom.value);
             connection.className = linked ? "empathy-choice-link is-linked" : "empathy-choice-link";
             connection.textContent = linked ? "●" : "○";
             connection.title = linked ? "Linked to an edge" : "Not linked to an edge";
@@ -1280,13 +1519,42 @@ export class EmpathyCanvasIntegration {
             up.type = "button"; up.textContent = "↑"; up.disabled = index === 0;
             const down = header.ownerDocument.createElement("button");
             down.type = "button"; down.textContent = "↓"; down.disabled = index + 1 === choices.length;
+            const condition = header.ownerDocument.createElement("button");
+            condition.type = "button";
+            condition.textContent = "when";
+            condition.className = choice.condition ? "empathy-choice-condition-toggle is-active" : "empathy-choice-condition-toggle";
+            condition.title = choice.condition ? "Edit condition below" : "Add availability condition";
             const remove = header.ownerDocument.createElement("button");
             remove.type = "button"; remove.textContent = "×"; remove.title = "Remove choice";
-            up.addEventListener("click", () => this.moveChoice(patch, node, index, index - 1));
-            down.addEventListener("click", () => this.moveChoice(patch, node, index, index + 1));
-            remove.addEventListener("click", () => this.removeChoice(patch, node, index));
-            row.append(order, text, connection, up, down, remove);
+            up.addEventListener("click", () => this.moveChoice(node, choice.atom.value, -1));
+            down.addEventListener("click", () => this.moveChoice(node, choice.atom.value, 1));
+            condition.addEventListener("click", () => {
+                if (choice.condition) {
+                    row.nextElementSibling?.querySelector<HTMLElement>("input, select")?.focus();
+                } else {
+                    const variable = this.ui.getVariables().find((item) => item.access !== NarrativeVariableAccess.WRITE);
+                    this.updateChoice(node, choice.atom.value, { condition: defaultCondition(variable) });
+                }
+            });
+            remove.addEventListener("click", () => this.removeChoice(patch, node, choice.atom.value));
+            row.append(order, text, connection, up, down, condition, remove);
             controls.append(row);
+            if (choice.condition) {
+                const conditionRow = header.ownerDocument.createElement("div");
+                conditionRow.className = "empathy-choice-condition-row";
+                const when = header.ownerDocument.createElement("span");
+                when.textContent = "when";
+                const host = header.ownerDocument.createElement("div");
+                host.append(this.conditionControls(header.ownerDocument, choice.condition, (value) =>
+                    this.updateChoice(node, choice.atom.value, { condition: value })));
+                const clear = header.ownerDocument.createElement("button");
+                clear.type = "button";
+                clear.textContent = "×";
+                clear.title = "Remove condition";
+                clear.addEventListener("click", () => this.updateChoice(node, choice.atom.value, { condition: undefined }));
+                conditionRow.append(when, host, clear);
+                controls.append(conditionRow);
+            }
         }
         const add = header.ownerDocument.createElement("button");
         add.type = "button";
@@ -1300,52 +1568,42 @@ export class EmpathyCanvasIntegration {
 
     private addChoice(node: RuntimeCanvasNode): void {
         const choices = Array.isArray(node.getData().empathyChoices) ? [...node.getData().empathyChoices!] : [];
-        choices.push(`Choice ${choices.length + 1}`);
+        const text = `Choice ${choices.length + 1}`;
+        choices.push({ atom: this.allocateForCanvas(node.canvas, AuthoredAtomType.CHOICE, text), text });
         this.updateNode(node, { empathyChoices: choices });
     }
 
-    private renameChoice(node: RuntimeCanvasNode, index: number, text: string): void {
+    private updateChoice(node: RuntimeCanvasNode, atomValue: number, updates: Partial<NarrativeChoice>): void {
         const choices = Array.isArray(node.getData().empathyChoices) ? [...node.getData().empathyChoices!] : [];
-        if (index >= choices.length) return;
-        choices[index] = text;
+        const index = choices.findIndex((choice) => choice.atom.value === atomValue);
+        if (index < 0) return;
+        choices[index] = { ...choices[index], ...updates };
+        if (choices[index].condition === undefined) delete choices[index].condition;
         this.updateNode(node, { empathyChoices: choices });
     }
 
-    private moveChoice(patch: CanvasPatch, node: RuntimeCanvasNode, from: number, to: number): void {
+    private moveChoice(node: RuntimeCanvasNode, atomValue: number, direction: -1 | 1): void {
         const choices = Array.isArray(node.getData().empathyChoices) ? [...node.getData().empathyChoices!] : [];
+        const from = choices.findIndex((choice) => choice.atom.value === atomValue);
+        const to = from + direction;
         if (from < 0 || to < 0 || from >= choices.length || to >= choices.length || from === to) return;
         [choices[from], choices[to]] = [choices[to], choices[from]];
-        for (const edge of this.outgoingRuntimeEdges(node.canvas, node)) {
-            const index = edge.getData().empathyChoiceIndex;
-            if (index === from) this.updateChoiceEdge(patch, edge, to);
-            else if (index === to) this.updateChoiceEdge(patch, edge, from);
-        }
-        node.setData({ ...node.getData(), empathyChoices: choices });
-        node.canvas.markDirty(node);
-        node.canvas.requestSave();
+        this.updateNode(node, { empathyChoices: choices });
     }
 
-    private removeChoice(patch: CanvasPatch, node: RuntimeCanvasNode, removed: number): void {
+    private removeChoice(patch: CanvasPatch, node: RuntimeCanvasNode, atomValue: number): void {
         const choices = Array.isArray(node.getData().empathyChoices) ? [...node.getData().empathyChoices!] : [];
-        if (removed < 0 || removed >= choices.length) return;
+        const removed = choices.findIndex((choice) => choice.atom.value === atomValue);
+        if (removed < 0) return;
         choices.splice(removed, 1);
         for (const edge of this.outgoingRuntimeEdges(node.canvas, node)) {
-            const index = edge.getData().empathyChoiceIndex;
-            if (index === removed) this.updateChoiceEdge(patch, edge, undefined);
-            else if (typeof index === "number" && index > removed) this.updateChoiceEdge(patch, edge, index - 1);
+            if (edge.getData().empathyChoiceAtom === atomValue) {
+                this.persistEdgeData(patch, edge, { empathyChoiceAtom: undefined }, false);
+            }
         }
         node.setData({ ...node.getData(), empathyChoices: choices });
         node.canvas.markDirty(node);
         node.canvas.requestSave();
-    }
-
-    private updateChoiceEdge(patch: CanvasPatch, edge: RuntimeCanvasEdge, index: number | undefined): void {
-        const data = { ...edge.getData(), empathyChoiceIndex: index };
-        if (index === undefined) delete data.empathyChoiceIndex;
-        edge.setData(data);
-        edge.render();
-        this.syncEdgeBadge(patch, edge);
-        patch.canvas.markDirty(edge);
     }
 
     private updateNode(node: RuntimeCanvasNode, updates: Partial<CanvasNodeData>): void {
@@ -1367,7 +1625,7 @@ export class EmpathyCanvasIntegration {
         if (!patch || patch.canvas.readonly) return;
         const sourceKind = getEmpathyCanvasNodeKind(edge.from?.node?.getData() ?? {});
         if (sourceKind === EmpathyCanvasNodeKind.CHOICE) {
-            const linked = edge.getData().empathyChoiceIndex !== undefined;
+            const linked = edge.getData().empathyChoiceAtom !== undefined;
             menu.addItem((item) => item.setTitle(linked ? "Change linked Empathy choice…" : "Link Empathy choice…").setSection("action").setIcon("list-ordered")
                 .onClick(() => this.openEdgeEditor(patch, edge, "choice")));
             menu.addItem((item) => item.setTitle("Unlink Empathy choice").setSection("action").setIcon("unlink")
@@ -1413,13 +1671,13 @@ export class EmpathyCanvasIntegration {
             const placeholder = document.createElement("option");
             placeholder.value = "";
             placeholder.textContent = "Select a choice…";
-            placeholder.selected = edge.getData().empathyChoiceIndex === undefined;
+            placeholder.selected = edge.getData().empathyChoiceAtom === undefined;
             choiceSelect.append(placeholder);
             if (Array.isArray(choices)) choices.forEach((choice, index) => {
                 const option = document.createElement("option");
-                option.value = String(index);
-                option.textContent = `${index} · ${choice}`;
-                option.selected = edge.getData().empathyChoiceIndex === index;
+                option.value = String(choice.atom.value);
+                option.textContent = `${index + 1} · ${choice.text}`;
+                option.selected = edge.getData().empathyChoiceAtom === choice.atom.value;
                 choiceSelect!.append(option);
             });
             editor.append(choiceSelect);
@@ -1452,14 +1710,14 @@ export class EmpathyCanvasIntegration {
             if (!Number.isInteger(value) || value < 0) { (choiceSelect ?? order).classList.add("is-invalid"); return; }
             if (mode === "choice") {
                 this.persistEdgeData(patch, edge, {
-                    empathyChoiceIndex: value,
+                    empathyChoiceAtom: value,
                     empathyCondition: undefined,
                     empathyElse: undefined,
                     empathyConditionOrder: undefined,
                 });
             } else {
                 this.persistEdgeData(patch, edge, {
-                    empathyChoiceIndex: undefined,
+                    empathyChoiceAtom: undefined,
                     empathyElse: undefined,
                     empathyCondition: condition,
                     empathyConditionOrder: value,
@@ -1482,14 +1740,19 @@ export class EmpathyCanvasIntegration {
             return;
         }
         this.persistEdgeData(patch, edge, {
-            empathyChoiceIndex: undefined,
+            empathyChoiceAtom: undefined,
             empathyElse: true,
             empathyCondition: undefined,
             empathyConditionOrder: undefined,
         });
     }
 
-    private persistEdgeData(patch: CanvasPatch, edge: RuntimeCanvasEdge, updates: Partial<CanvasEdgeData>): void {
+    private persistEdgeData(
+        patch: CanvasPatch,
+        edge: RuntimeCanvasEdge,
+        updates: Partial<CanvasEdgeData>,
+        requestSave = true,
+    ): void {
         const data = { ...edge.getData(), ...updates };
         for (const key of edgeSemanticKeys) {
             if (data[key] === undefined) delete data[key];
@@ -1498,7 +1761,7 @@ export class EmpathyCanvasIntegration {
         edge.render();
         this.syncEdgeBadge(patch, edge);
         patch.canvas.markDirty(edge);
-        patch.canvas.requestSave();
+        if (requestSave) patch.canvas.requestSave();
         const source = edge.from?.node as RuntimeCanvasNode | undefined;
         if (source && patch.nodes.has(source)) this.decorateNode(patch, source);
         this.syncEdgeToolbar(patch);
@@ -1509,7 +1772,7 @@ export class EmpathyCanvasIntegration {
     }
 
     private clearChoiceEdge(patch: CanvasPatch, edge: RuntimeCanvasEdge): void {
-        this.persistEdgeData(patch, edge, { empathyChoiceIndex: undefined });
+        this.persistEdgeData(patch, edge, { empathyChoiceAtom: undefined });
     }
 
     private closeEdgeEditor(patch: CanvasPatch): void {
@@ -1601,7 +1864,9 @@ export class EmpathyCanvasIntegration {
                     ? "choice"
                     : undefined;
         const choices = edge.from?.node?.getData().empathyChoices;
-        const summary = kind === "choice" ? formatChoiceBadge(data, Array.isArray(choices) ? choices : []) : formatTransitionBadge(data);
+        const summary = kind === "choice"
+            ? formatChoiceBadge(data, Array.isArray(choices) ? choices.filter(isNarrativeChoice) : [])
+            : formatTransitionBadge(data);
         const lineGroup = edge.lineGroupEl;
         const center = edge.getCenter();
         if (!kind || summary === undefined || lineGroup?.namespaceURI !== "http://www.w3.org/2000/svg") {
@@ -1676,10 +1941,8 @@ export class EmpathyCanvasIntegration {
         try {
             const target = this.createNode(canvas, kind, { x, y: y + height + 100 }, nodeSizes[kind]);
             this.connectNodes(source, target);
-            if (kind === EmpathyCanvasNodeKind.SAY) this.focusCharacterField(target);
-            else if (kind === EmpathyCanvasNodeKind.LINE) target.startEditing();
-            else if (kind === EmpathyCanvasNodeKind.SET) this.focusVariablePicker(target);
-            else if (kind === EmpathyCanvasNodeKind.PORTAL_RECEIVER) this.focusPortalReceiver(target);
+            if (kind === EmpathyCanvasNodeKind.LINE) target.startEditing();
+            else this.focusNodeControl(target, kind);
         } catch (error) {
             this.ui.showNotice(`Empathy continuation creation failed: ${error instanceof Error ? error.message : String(error)}`);
         }
@@ -1712,7 +1975,16 @@ export class EmpathyCanvasIntegration {
 
     private setNodeKind(node: RuntimeCanvasNode, kind: EmpathyCanvasNodeKind): void {
         if (getEmpathyCanvasNodeKind(node.getData()) === kind) return;
-        node.setData(convertedEmpathyNodeData(node.getData(), kind));
+        const converted = convertedEmpathyNodeData(node.getData(), kind);
+        if (kind === EmpathyCanvasNodeKind.SAY || kind === EmpathyCanvasNodeKind.LINE) {
+            converted.empathyLineAtom = this.allocateForCanvas(
+                node.canvas,
+                AuthoredAtomType.LINE,
+                String(converted.text ?? ""),
+                kind === EmpathyCanvasNodeKind.SAY ? String(converted.empathyCharacter ?? "") : undefined,
+            );
+        }
+        node.setData(converted);
         node.canvas.markDirty(node);
         node.canvas.requestSave();
     }
@@ -1843,18 +2115,9 @@ export class EmpathyCanvasIntegration {
         try { this.createNode(canvas, kind, pos, size); }
         catch (error) { this.ui.showNotice(`Empathy node creation failed: ${error instanceof Error ? error.message : String(error)}`); }
     }
-    private focusCharacterField(node: RuntimeCanvasNode): void { node.nodeEl.querySelector<HTMLInputElement>(".empathy-canvas-character-input")?.focus(); }
-    private focusEntryName(node: RuntimeCanvasNode): void { node.nodeEl.querySelector<HTMLInputElement>(".empathy-canvas-entry-input")?.focus(); }
-    private focusVariablePicker(node: RuntimeCanvasNode): void { node.nodeEl.querySelector<HTMLInputElement>(".empathy-variable-picker input")?.focus(); }
-    private focusPortalReceiver(node: RuntimeCanvasNode): void { node.nodeEl.querySelector<HTMLSelectElement>(".empathy-canvas-portal-select")?.focus(); }
-    private focusPortalName(node: RuntimeCanvasNode): void { node.nodeEl.querySelector<HTMLInputElement>(".empathy-canvas-portal-input")?.focus(); }
-    private focusHeaderControl(node: RuntimeCanvasNode, kind: EmpathyCanvasNodeKind): void {
-        if (kind === EmpathyCanvasNodeKind.ENTRY) this.focusEntryName(node);
-        else if (kind === EmpathyCanvasNodeKind.CHOICE) {
-            node.nodeEl.querySelector<HTMLElement>(".empathy-choice-row input, .empathy-choice-add")?.focus();
-        } else if (kind === EmpathyCanvasNodeKind.SET) this.focusVariablePicker(node);
-        else if (kind === EmpathyCanvasNodeKind.PORTAL_RECEIVER) this.focusPortalReceiver(node);
-        else if (kind === EmpathyCanvasNodeKind.PORTAL_TRANSMITTER) this.focusPortalName(node);
+    private focusNodeControl(node: RuntimeCanvasNode, kind: EmpathyCanvasNodeKind): void {
+        const selector = nodeFocusSelectors[kind];
+        if (selector) node.nodeEl.querySelector<HTMLElement>(selector)?.focus();
     }
     private unload(): void {
         this.disposed = true;

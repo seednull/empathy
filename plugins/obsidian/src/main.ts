@@ -7,6 +7,13 @@ import {
     generateHeader,
     NarrativeVariable,
 } from "./compile";
+import {
+    allocateAuthoredAtom,
+    AtomAllocatorState,
+    AuthoredAtom,
+    AuthoredAtomType,
+    initialAtomAllocatorState,
+} from "./atoms";
 import { EmpathyCanvasIntegration } from "./canvas";
 import {
     EMPATHY_PANEL_VIEW,
@@ -20,22 +27,45 @@ interface InternalCanvasView extends ItemView {
 
 interface EmpathyPluginData {
     variables: NarrativeVariable[];
+    nextAtomValue: AtomAllocatorState;
 }
 
 export default class EmpathyPlugin extends Plugin {
     private canvasIntegration!: EmpathyCanvasIntegration;
     private compiling = false;
     private variables: NarrativeVariable[] = [];
+    private nextAtomValue: AtomAllocatorState = { ...initialAtomAllocatorState };
     private lastCanvasView?: InternalCanvasView;
+    private dataSave: Promise<void> = Promise.resolve();
 
     async onload(): Promise<void> {
         const stored = await this.loadData() as EmpathyPluginData | null;
-        this.variables = stored?.variables ?? [];
+        if (stored) {
+            this.variables = [...stored.variables];
+            this.nextAtomValue = { ...stored.nextAtomValue };
+        }
+        const withActiveCanvas = <T>(fallback: T, action: (canvas: Canvas, view: InternalCanvasView) => T): T => {
+            const view = this.activeCanvasView();
+            return view?.canvas ? action(view.canvas, view) : fallback;
+        };
         this.registerView(EMPATHY_PANEL_VIEW, (leaf) => new EmpathyPanelView(leaf, {
             getVariables: () => this.variables,
             setVariables: (variables) => this.setVariables(variables),
             getUsageCount: (name) => this.canvasIntegration.variableUsageCount(name),
             compileActiveCanvas: () => this.compileActiveCanvas(),
+            getAtomSources: () => withActiveCanvas([], (canvas) => this.canvasIntegration.atomSources(canvas)),
+            renameAtomKey: (source, key) => withActiveCanvas(
+                "No active Canvas is available.",
+                (canvas) => this.canvasIntegration.renameAtomKey(canvas, source, key),
+            ),
+            regenerateAtomKey: (source) => withActiveCanvas(
+                "No active Canvas is available.",
+                (canvas) => this.canvasIntegration.regenerateAtomKey(canvas, source),
+            ),
+            goToAtomSource: (source) => withActiveCanvas(false, (canvas, view) => {
+                void this.app.workspace.revealLeaf(view.leaf);
+                return this.canvasIntegration.goToAtomSource(canvas, source);
+            }),
         }));
         this.canvasIntegration = new EmpathyCanvasIntegration(this, {
             setIcon,
@@ -45,6 +75,9 @@ export default class EmpathyPlugin extends Plugin {
             },
             getVariables: () => this.variables,
             openPanel: (selectCreated) => void this.openPanel(selectCreated),
+            allocateAtom: (type, text, character, usedValues, usedKeys) =>
+                this.allocateAtom(type, text, character, usedValues, usedKeys),
+            atomsChanged: () => this.refreshPanels(),
         });
         this.canvasIntegration.register();
 
@@ -99,7 +132,10 @@ export default class EmpathyPlugin extends Plugin {
 
     private rememberCanvas(view: unknown): void {
         const candidate = view as InternalCanvasView | undefined;
-        if (candidate?.getViewType() === "canvas") this.lastCanvasView = candidate;
+        if (candidate?.getViewType() === "canvas") {
+            this.lastCanvasView = candidate;
+            this.refreshPanels();
+        }
     }
 
     private createNode(canvas: Canvas, kind: EmpathyCanvasNodeKind): void {
@@ -114,8 +150,42 @@ export default class EmpathyPlugin extends Plugin {
 
     private async setVariables(variables: readonly NarrativeVariable[]): Promise<void> {
         this.variables = [...variables];
-        await this.saveData({ variables: this.variables });
+        await this.persistData();
         this.canvasIntegration.variablesChanged();
+        this.refreshPanels();
+    }
+
+    private persistData(): Promise<void> {
+        const snapshot: EmpathyPluginData = {
+            variables: [...this.variables],
+            nextAtomValue: { ...this.nextAtomValue },
+        };
+        const save = (): Promise<void> => this.saveData(snapshot);
+        this.dataSave = this.dataSave.then(save, save);
+        return this.dataSave;
+    }
+
+    private allocateAtom(
+        type: AuthoredAtomType,
+        text: string,
+        character: string | undefined,
+        usedValues: ReadonlySet<number>,
+        usedKeys: ReadonlySet<string>,
+    ): AuthoredAtom {
+        const allocation = allocateAuthoredAtom(
+            type,
+            text,
+            character,
+            this.nextAtomValue[type],
+            usedValues,
+            usedKeys,
+        );
+        this.nextAtomValue = { ...this.nextAtomValue, [type]: allocation.nextValue };
+        void this.persistData();
+        return allocation.atom;
+    }
+
+    private refreshPanels(): void {
         for (const leaf of this.app.workspace.getLeavesOfType(EMPATHY_PANEL_VIEW)) {
             if (leaf.view instanceof EmpathyPanelView) leaf.view.refresh();
         }
