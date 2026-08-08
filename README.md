@@ -348,15 +348,22 @@ ends without producing an empty CHOICE yield.
 
 Compilation performs lightweight structural and type validation before writing either artifact.
 Invalid nodes and edges receive Canvas styling/tooltips, and the compile Notice reports the first
-error plus a remaining count. The generated header includes `<stddef.h>` and `<stdint.h>`, stable
-ID-derived LINE/CHOICE constants when an ID exists, numeric-fallback constants for unassigned atoms,
-and atom text tables whose optional ID pointer is null when unassigned. Authored LINE, CHOICE, and
-character display strings are encoded from JavaScript text to explicit UTF-8 bytes in C literals;
-printable ASCII stays readable while non-ASCII bytes use fixed-width octal escapes. The header also
-contains one native state struct per derived table, table and global parameter constants, parameter
-descriptors using `offsetof()` against the correct struct, and the required parameter-table count for
-`Empathy_MachineDesc.max_parameter_tables`. TypeScript deliberately does not emulate native struct
-padding.
+error plus a remaining count. The generated header includes only `<empathy.h>` and does not add
+standard-library header dependencies. The Canvas basename becomes one case-preserving C identifier
+prefix for type names; invalid identifier runs become underscores and no extra `_EMPATHY` segment is
+added. Macro names and enum values use the uppercase form of that prefix, while generated variable
+names use its lowercase form. Count, version, and size values remain defines. LINE, CHARACTER, and
+CHOICE atom values are enum members, using an authored ID when present and a numeric fallback otherwise.
+
+Header sections are emitted as pragma/include, defines, enums and supporting structs, atom text
+arrays, then descriptor arrays. An atom text's optional ID pointer is null when unassigned. Authored
+LINE, CHOICE, and character strings remain human-readable Unicode inside ordinary string literals;
+the file itself is UTF-8, while quotes, backslashes, controls, and C17 trigraph hazards are escaped
+locally. Consumers must interpret the source and execution charset as UTF-8 (`/utf-8` on MSVC or
+`-finput-charset=UTF-8 -fexec-charset=UTF-8` on GCC/Clang). The header also contains one prefixed
+native state struct per derived table, a generated uppercase `OFFSET_OF` macro that converts a field
+address through a null structure pointer to `uint64_t`, and the required parameter-table count for
+`Empathy_MachineDesc.max_parameter_tables`. TypeScript deliberately does not emulate native struct padding.
 
 Converting an ordinary text card treats its text literally. Arbitrary expressions, boolean trees,
 variable-to-variable comparisons, nested table paths, runtime preview, subgraphs, and stable

@@ -1043,26 +1043,53 @@ export function compileCanvas(canvas: Canvas, variables: readonly NarrativeVaria
     };
 }
 
+const cTrigraphSuffixes = new Set(["=", "/", "'", "(", ")", "!", "<", ">", "-"]);
+const utf8Encoder = new TextEncoder();
+
 export function escapeCStringUtf8(value: string): string {
     let result = "\"";
-    for (const byte of new TextEncoder().encode(value)) {
-        if (byte === 92) result += "\\\\";
-        else if (byte === 34) result += "\\\"";
-        else if (byte === 63) result += "\\077";
-        else if (byte === 10) result += "\\n";
-        else if (byte === 13) result += "\\r";
-        else if (byte === 9) result += "\\t";
-        else if (byte < 32 || byte >= 127) result += `\\${byte.toString(8).padStart(3, "0")}`;
-        else result += String.fromCharCode(byte);
+    for (let offset = 0; offset < value.length;) {
+        if (value[offset] === "?" && value[offset + 1] === "?" && cTrigraphSuffixes.has(value[offset + 2] ?? "")) {
+            result += "?\\?";
+            offset += 2;
+            continue;
+        }
+        const codePoint = value.codePointAt(offset)!;
+        if (codePoint >= 0xD800 && codePoint <= 0xDFFF) {
+            throw new Error("C string contains an unpaired UTF-16 surrogate");
+        }
+        const character = String.fromCodePoint(codePoint);
+        offset += character.length;
+        if (codePoint === 0x22) result += "\\\"";
+        else if (codePoint === 0x5C) result += "\\\\";
+        else if (codePoint === 0x07) result += "\\a";
+        else if (codePoint === 0x08) result += "\\b";
+        else if (codePoint === 0x09) result += "\\t";
+        else if (codePoint === 0x0A) result += "\\n";
+        else if (codePoint === 0x0B) result += "\\v";
+        else if (codePoint === 0x0C) result += "\\f";
+        else if (codePoint === 0x0D) result += "\\r";
+        else if (
+            codePoint < 0x20 || codePoint === 0x7F ||
+            (codePoint >= 0x80 && codePoint <= 0x9F) ||
+            codePoint === 0x2028 || codePoint === 0x2029
+        ) {
+            for (const byte of utf8Encoder.encode(character)) {
+                result += `\\${byte.toString(8).padStart(3, "0")}`;
+            }
+        } else result += character;
     }
     return result + "\"";
 }
 
-function generatedName(sourceName: string): { macro: string; symbol: string } {
-    let clean = sourceName.replace(/[^A-Za-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
-    if (clean.length === 0) clean = "CANVAS";
-    if (/^[0-9]/.test(clean)) clean = `canvas_${clean}`;
-    return { macro: `${clean.toUpperCase()}_EMPATHY`, symbol: `${clean.toLowerCase()}_empathy` };
+function generatedPrefix(sourceName: string): string {
+    let prefix = sourceName
+        .replace(/[^A-Za-z0-9_]+/g, "_")
+        .replace(/_+/g, "_")
+        .replace(/^_+|_+$/g, "");
+    if (prefix.length === 0) prefix = "Canvas";
+    if (/^[0-9]/.test(prefix)) prefix = `Canvas_${prefix}`;
+    return prefix;
 }
 
 const cKeywords = new Set(["auto", "break", "case", "char", "const", "continue", "default", "do", "double", "else", "enum", "extern", "float", "for", "goto", "if", "inline", "int", "long", "register", "restrict", "return", "short", "signed", "sizeof", "static", "struct", "switch", "typedef", "union", "unsigned", "void", "volatile", "while"]);
@@ -1097,14 +1124,30 @@ function stringTable(symbol: string, values: readonly string[]): string[] {
     ];
 }
 
-function authoredAtomTable(typeName: string, symbol: string, values: readonly CompiledAuthoredAtom[]): string[] {
+function authoredAtomTable(
+    typeName: string,
+    symbol: string,
+    values: readonly CompiledAuthoredAtom[],
+    enumerators: ReadonlyMap<number, string>,
+): string[] {
     return [
         `static const ${typeName} ${symbol}[] =`,
         "{",
         ...(values.length > 0
-            ? values.map((atom) => `    {${atom.value}u, ${atom.key === undefined ? "0" : escapeCStringUtf8(atom.key)}, ${escapeCStringUtf8(atom.text)}},`)
+            ? values.map((atom) => `    {${enumerators.get(atom.value)}, ${atom.key === undefined ? "0" : escapeCStringUtf8(atom.key)}, ${escapeCStringUtf8(atom.text)}},`)
             : ["    {0u, 0, 0},"]),
         "};",
+    ];
+}
+
+function enumDefinition(typeName: string, values: readonly (readonly [name: string, value: number])[]): string[] {
+    if (values.length === 0) return [];
+    return [
+        `typedef enum ${typeName}_t`,
+        "{",
+        ...values.map(([name, value]) => `    ${name} = ${value}u,`),
+        `} ${typeName};`,
+        "",
     ];
 }
 
@@ -1121,39 +1164,45 @@ function authoredAtomRange(values: readonly CompiledAuthoredAtom[]): { min: numb
 }
 
 function authoredAtomConstants(
-    macro: string,
+    prefix: string,
     kind: "LINE" | "CHOICE",
     values: readonly CompiledAuthoredAtom[],
 ): Map<number, string> {
     return new Map(values.map((atom) => [
         atom.value,
-        `${macro}_${kind}_${atom.key === undefined ? String(atom.value) : atom.key.toUpperCase()}`,
+        `${prefix}_${kind}_${atom.key === undefined ? String(atom.value) : atom.key.toUpperCase()}`,
     ]));
 }
 
 export function generateHeader(result: CompileResult, sourceName: string): string {
-    const { macro, symbol } = generatedName(sourceName);
+    const prefix = generatedPrefix(sourceName);
+    const uppercasePrefix = prefix.toUpperCase();
+    const variablePrefix = prefix.toLowerCase();
     const lineRange = authoredAtomRange(result.lines);
     const characterRange = atomRange(result.characters.length);
     const choiceRange = authoredAtomRange(result.choices);
     const usedTypes = new Set<string>();
-    const tableTypes = new Map(result.tables.map((table) => [table.name, uniqueName(cTypeName(table.name), usedTypes)]));
+    const tableTypes = new Map(result.tables.map((table) => [
+        table.name,
+        uniqueName(`${prefix}_${cTypeName(table.name)}`, usedTypes),
+    ]));
     const tableConstants = new Map<string, string>();
     const usedTableConstants = new Set<string>();
     for (const table of result.tables) {
-        tableConstants.set(table.name, uniqueName(`${macro}_PARAMETER_TABLE_${cIdentifier(table.name, "TABLE").toUpperCase()}`, usedTableConstants));
+        tableConstants.set(table.name, uniqueName(`${uppercasePrefix}_PARAMETER_TABLE_${cIdentifier(table.name, "TABLE").toUpperCase()}`, usedTableConstants));
     }
     const parameterConstants = new Map<string, string>();
     const usedParameterConstants = new Set<string>();
     const fields = new Map<string, string>();
     const fieldsByTable = new Map<string, Set<string>>();
-    const lineConstants = authoredAtomConstants(macro, "LINE", result.lines);
-    const choiceConstants = authoredAtomConstants(macro, "CHOICE", result.choices);
+    const lineConstants = authoredAtomConstants(uppercasePrefix, "LINE", result.lines);
+    const characterConstants = new Map(result.characters.map((_, id) => [id, `${uppercasePrefix}_CHARACTER_${id}`]));
+    const choiceConstants = authoredAtomConstants(uppercasePrefix, "CHOICE", result.choices);
     for (const parameter of result.parameters) {
         const tableFields = fieldsByTable.get(parameter.tableName) ?? new Set<string>();
         fieldsByTable.set(parameter.tableName, tableFields);
         fields.set(parameter.name, uniqueName(cIdentifier(parameter.variableName, "value"), tableFields));
-        const base = `${macro}_PARAMETER_${cIdentifier(parameter.tableName, "TABLE").toUpperCase()}_${cIdentifier(parameter.variableName, "VALUE").toUpperCase()}`;
+        const base = `${uppercasePrefix}_PARAMETER_${cIdentifier(parameter.tableName, "TABLE").toUpperCase()}_${cIdentifier(parameter.variableName, "VALUE").toUpperCase()}`;
         parameterConstants.set(parameter.name, uniqueName(base, usedParameterConstants));
     }
     const typeNames: Record<NarrativeVariableType, string> = {
@@ -1176,41 +1225,55 @@ export function generateHeader(result: CompileResult, sourceName: string): strin
         "",
         "// Generated by the Empathy Obsidian POC. Do not edit manually.",
         "#include <empathy.h>",
-        "#include <stddef.h>",
-        "#include <stdint.h>",
         "",
-        `typedef enum ${macro}_AtomType_t`,
+        `#define ${uppercasePrefix}_PARAMETER_TABLE_COUNT ${result.tables.length}u`,
+        `#define ${uppercasePrefix}_REQUIRED_PARAMETER_TABLE_COUNT ${result.tables.length}u`,
+        `#define ${uppercasePrefix}_PARAMETER_COUNT ${result.parameters.length}u`,
+        `#define ${uppercasePrefix}_LINE_COUNT ${result.lines.length}u`,
+        `#define ${uppercasePrefix}_CHARACTER_COUNT ${result.characters.length}u`,
+        `#define ${uppercasePrefix}_CHOICE_COUNT ${result.choices.length}u`,
+        `#define ${uppercasePrefix}_ENTRY_POINT_COUNT ${result.entryPoints.length}u`,
+        `#define ${uppercasePrefix}_BYTECODE_VERSION 0x${EMPATHY_BYTECODE_VERSION.toString(16).toUpperCase().padStart(8, "0")}u`,
+        `#define ${uppercasePrefix}_BYTECODE_SIZE ${result.bytecode.length}u`,
+        `#define ${uppercasePrefix}_OFFSET_OF(TYPE, MEMBER) ((uint64_t)&(((TYPE *)0)->MEMBER))`,
+        "",
+        `typedef enum ${prefix}_AtomType_t`,
         "{",
-        `    ${macro}_ATOM_TYPE_LINE = ${EmpathyPocAtomType.LINE},`,
-        `    ${macro}_ATOM_TYPE_CHARACTER = ${EmpathyPocAtomType.CHARACTER},`,
-        `    ${macro}_ATOM_TYPE_CHOICE = ${EmpathyPocAtomType.CHOICE},`,
-        `} ${macro}_AtomType;`,
+        `    ${uppercasePrefix}_ATOM_TYPE_LINE = ${EmpathyPocAtomType.LINE},`,
+        `    ${uppercasePrefix}_ATOM_TYPE_CHARACTER = ${EmpathyPocAtomType.CHARACTER},`,
+        `    ${uppercasePrefix}_ATOM_TYPE_CHOICE = ${EmpathyPocAtomType.CHOICE},`,
+        `} ${prefix}_AtomType;`,
         "",
-        `typedef enum ${macro}_YieldType_t`,
+        `typedef enum ${prefix}_YieldType_t`,
         "{",
-        `    ${macro}_YIELD_TYPE_LINE = ${EmpathyPocYieldType.LINE},`,
-        `    ${macro}_YIELD_TYPE_CHOICE = ${EmpathyPocYieldType.CHOICE},`,
-        `    ${macro}_YIELD_TYPE_SAY = ${EmpathyPocYieldType.SAY},`,
-        `} ${macro}_YieldType;`,
+        `    ${uppercasePrefix}_YIELD_TYPE_LINE = ${EmpathyPocYieldType.LINE},`,
+        `    ${uppercasePrefix}_YIELD_TYPE_CHOICE = ${EmpathyPocYieldType.CHOICE},`,
+        `    ${uppercasePrefix}_YIELD_TYPE_SAY = ${EmpathyPocYieldType.SAY},`,
+        `} ${prefix}_YieldType;`,
         "",
-        `typedef struct ${macro}_AtomText_t`,
+    ];
+    if (result.tables.length > 0) {
+        lines.push(`typedef enum ${prefix}_ParameterTable_t`, "{");
+        for (const table of result.tables) lines.push(`    ${tableConstants.get(table.name)} = ${table.index},`);
+        lines.push(`} ${prefix}_ParameterTable;`, "");
+    }
+    if (result.parameters.length > 0) {
+        lines.push(`typedef enum ${prefix}_Parameter_t`, "{");
+        for (const parameter of result.parameters) lines.push(`    ${parameterConstants.get(parameter.name)} = ${parameter.parameterIndex},`);
+        lines.push(`} ${prefix}_Parameter;`, "");
+    }
+    lines.push(
+        ...enumDefinition(`${prefix}_LineAtom`, result.lines.map((atom) => [lineConstants.get(atom.value)!, atom.value] as const)),
+        ...enumDefinition(`${prefix}_CharacterAtom`, result.characters.map((_, id) => [characterConstants.get(id)!, id] as const)),
+        ...enumDefinition(`${prefix}_ChoiceAtom`, result.choices.map((atom) => [choiceConstants.get(atom.value)!, atom.value] as const)),
+        `typedef struct ${prefix}_AtomText_t`,
         "{",
         "    uint32_t value;",
         "    const char *key;",
         "    const char *text;",
-        `} ${macro}_AtomText;`,
+        `} ${prefix}_AtomText;`,
         "",
-    ];
-    if (result.tables.length > 0) {
-        lines.push(`typedef enum ${macro}_ParameterTable_t`, "{");
-        for (const table of result.tables) lines.push(`    ${tableConstants.get(table.name)} = ${table.index},`);
-        lines.push(`} ${macro}_ParameterTable;`, "");
-    }
-    if (result.parameters.length > 0) {
-        lines.push(`typedef enum ${macro}_Parameter_t`, "{");
-        for (const parameter of result.parameters) lines.push(`    ${parameterConstants.get(parameter.name)} = ${parameter.parameterIndex},`);
-        lines.push(`} ${macro}_Parameter;`, "");
-    }
+    );
     for (const table of result.tables) {
         lines.push(`typedef struct ${tableTypes.get(table.name)}`, "{");
         for (const parameter of result.parameters.filter((value) => value.tableName === table.name)) {
@@ -1219,68 +1282,52 @@ export function generateHeader(result: CompileResult, sourceName: string): strin
         lines.push(`} ${tableTypes.get(table.name)};`, "");
     }
     lines.push(
-        `#define ${macro}_PARAMETER_TABLE_COUNT ${result.tables.length}u`,
-        `#define ${macro}_REQUIRED_PARAMETER_TABLE_COUNT ${result.tables.length}u`,
-        `#define ${macro}_PARAMETER_COUNT ${result.parameters.length}u`,
-        `#define ${macro}_LINE_COUNT ${result.lines.length}u`,
-        `#define ${macro}_CHARACTER_COUNT ${result.characters.length}u`,
-        `#define ${macro}_CHOICE_COUNT ${result.choices.length}u`,
-        `#define ${macro}_ENTRY_POINT_COUNT ${result.entryPoints.length}u`,
-        `#define ${macro}_BYTECODE_VERSION 0x${EMPATHY_BYTECODE_VERSION.toString(16).toUpperCase().padStart(8, "0")}u`,
-        `#define ${macro}_BYTECODE_SIZE ${result.bytecode.length}u`,
+        ...authoredAtomTable(`${prefix}_AtomText`, `${variablePrefix}_line_atoms`, result.lines, lineConstants),
         "",
-    );
-    for (const atom of result.lines) lines.push(`#define ${lineConstants.get(atom.value)} ${atom.value}u`);
-    for (let id = 0; id < result.characters.length; ++id) lines.push(`#define ${macro}_CHARACTER_${id} ${id}u`);
-    for (const atom of result.choices) lines.push(`#define ${choiceConstants.get(atom.value)} ${atom.value}u`);
-    lines.push(
+        ...stringTable(`${variablePrefix}_character_strings`, result.characters),
         "",
-        ...authoredAtomTable(`${macro}_AtomText`, `${symbol}_line_atoms`, result.lines),
-        "",
-        ...stringTable(`${symbol}_character_strings`, result.characters),
-        "",
-        ...authoredAtomTable(`${macro}_AtomText`, `${symbol}_choice_atoms`, result.choices),
+        ...authoredAtomTable(`${prefix}_AtomText`, `${variablePrefix}_choice_atoms`, result.choices, choiceConstants),
         "",
     );
     lines.push(
-        `static const Empathy_AtomTypeDesc ${symbol}_atom_types[] =`,
+        `static const Empathy_AtomTypeDesc ${variablePrefix}_atom_types[] =`,
         "{",
-        `    {${macro}_ATOM_TYPE_LINE, ${lineRange.min}u, ${lineRange.max}u},`,
-        `    {${macro}_ATOM_TYPE_CHARACTER, ${characterRange.min}u, ${characterRange.max}u},`,
-        `    {${macro}_ATOM_TYPE_CHOICE, ${choiceRange.min}u, ${choiceRange.max}u},`,
+        `    {${uppercasePrefix}_ATOM_TYPE_LINE, ${lineRange.min}u, ${lineRange.max}u},`,
+        `    {${uppercasePrefix}_ATOM_TYPE_CHARACTER, ${characterRange.min}u, ${characterRange.max}u},`,
+        `    {${uppercasePrefix}_ATOM_TYPE_CHOICE, ${choiceRange.min}u, ${choiceRange.max}u},`,
         "};",
         "",
     );
     if (result.parameters.length > 0) {
-        lines.push(`static const Empathy_ParameterDesc ${symbol}_parameters[] =`, "{");
+        lines.push(`static const Empathy_ParameterDesc ${variablePrefix}_parameters[] =`, "{");
         for (const parameter of result.parameters) {
             lines.push(
-                `    {${tableConstants.get(parameter.tableName)}, {${valueTypes[parameter.type]}, 0u}, ${accesses[parameter.access]}, offsetof(${tableTypes.get(parameter.tableName)}, ${fields.get(parameter.name)})},`,
+                `    {${tableConstants.get(parameter.tableName)}, {${valueTypes[parameter.type]}, 0u}, ${accesses[parameter.access]}, ${uppercasePrefix}_OFFSET_OF(${tableTypes.get(parameter.tableName)}, ${fields.get(parameter.name)})},`,
             );
         }
         lines.push("};", "");
     }
     lines.push(
-        `static const Empathy_ValueType ${symbol}_choice_resume_types[] =`,
+        `static const Empathy_ValueType ${variablePrefix}_choice_resume_types[] =`,
         "{",
-        `    {EMPATHY_VALUE_BASE_TYPE_ATOM, ${macro}_ATOM_TYPE_CHOICE},`,
+        `    {EMPATHY_VALUE_BASE_TYPE_ATOM, ${uppercasePrefix}_ATOM_TYPE_CHOICE},`,
         "};",
         "",
-        `static const Empathy_YieldDesc ${symbol}_yields[] =`,
+        `static const Empathy_YieldDesc ${variablePrefix}_yields[] =`,
         "{",
         "    {0u, 0},",
-        `    {1u, ${symbol}_choice_resume_types},`,
+        `    {1u, ${variablePrefix}_choice_resume_types},`,
         "    {0u, 0},",
         "};",
         "",
-        `static const Empathy_ProgramLayoutDesc ${symbol}_layout_desc =`,
+        `static const Empathy_ProgramLayoutDesc ${variablePrefix}_layout_desc =`,
         "{",
-        `    3u, ${symbol}_atom_types,`,
-        `    ${result.parameters.length}u, ${result.parameters.length > 0 ? `${symbol}_parameters` : "0"},`,
-        `    3u, ${symbol}_yields,`,
+        `    3u, ${variablePrefix}_atom_types,`,
+        `    ${result.parameters.length}u, ${result.parameters.length > 0 ? `${variablePrefix}_parameters` : "0"},`,
+        `    3u, ${variablePrefix}_yields,`,
         "};",
         "",
-        `static const Empathy_EntryPointDesc ${symbol}_entry_points[] =`,
+        `static const Empathy_EntryPointDesc ${variablePrefix}_entry_points[] =`,
         "{",
     );
     for (const entryPoint of result.entryPoints) {

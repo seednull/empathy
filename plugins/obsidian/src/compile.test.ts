@@ -884,7 +884,7 @@ test("generates bounded collision-safe ASCII IDs from current authored text", ()
     }
 });
 
-test("validates, compiles, and generates numeric constants for unassigned atom IDs", () => {
+test("validates, compiles, and generates numeric enum members for unassigned atom IDs", () => {
     const entry = node("entry", EmpathyCanvasNodeKind.ENTRY);
     const line = node("line", EmpathyCanvasNodeKind.LINE, {
         text: "The tower is still transmitting.",
@@ -902,9 +902,10 @@ test("validates, compiles, and generates numeric constants for unassigned atom I
         key: undefined,
         text: "The tower is still transmitting.",
     }]);
-    const header = generateHeader(result, "radio story");
-    assert.match(header, /#define RADIO_STORY_EMPATHY_LINE_1482 1482u/);
-    assert.match(header, /\{1482u, 0, "The tower is still transmitting\."\}/);
+    const header = generateHeader(result, "Radio Story");
+    assert.match(header, /typedef enum Radio_Story_LineAtom_t[\s\S]*RADIO_STORY_LINE_1482 = 1482u,[\s\S]*} Radio_Story_LineAtom;/);
+    assert.doesNotMatch(header, /^#define (?:RADIO_STORY|Radio_Story)_LINE_1482/m);
+    assert.match(header, /\{RADIO_STORY_LINE_1482, 0, "The tower is still transmitting\."\}/);
 });
 
 test("repairs duplicated SAY and CHOICE identities and remaps duplicated edges", () => {
@@ -1012,7 +1013,7 @@ test("ends without yielding when every CHOICE option is hidden", () => {
     });
 });
 
-test("generates keyed and numeric-fallback constants without changing the CHOICE resume contract", () => {
+test("generates keyed and numeric-fallback atom enums without changing the CHOICE resume contract", () => {
     const fixture = conditionalChoiceGraph();
     fixture.choiceNode.setData({
         ...fixture.choiceNode.getData(),
@@ -1030,36 +1031,40 @@ test("generates keyed and numeric-fallback constants without changing the CHOICE
     originalEntryEdge.to.node = line;
     fixture.canvas.edges.set("line-choice", new MockEdge("line-choice", line, fixture.choiceNode));
     const result = compileCanvas(fixture.canvas, variables);
-    const header = generateHeader(result, "radio story");
-    assert.match(header, /RADIO_STORY_EMPATHY_LINE_DLG_RADIO_INTRO_00 1482u/);
-    assert.match(header, /RADIO_STORY_EMPATHY_CHOICE_CHOICE_RADIO_ASK 91u/);
-    assert.match(header, /RADIO_STORY_EMPATHY_CHOICE_73 73u/);
-    assert.match(header, /\{73u, 0, "Always"\}/);
-    assert.match(header, /\{91u, "choice_radio_ask", "Radio"\}/);
-    assert.match(header, /\{EMPATHY_VALUE_BASE_TYPE_ATOM, RADIO_STORY_EMPATHY_ATOM_TYPE_CHOICE\}/);
+    const header = generateHeader(result, "Radio Story");
+    assert.match(header, /RADIO_STORY_LINE_DLG_RADIO_INTRO_00 = 1482u/);
+    assert.match(header, /RADIO_STORY_CHOICE_CHOICE_RADIO_ASK = 91u/);
+    assert.match(header, /RADIO_STORY_CHOICE_73 = 73u/);
+    assert.match(header, /\{RADIO_STORY_CHOICE_73, 0, "Always"\}/);
+    assert.match(header, /\{RADIO_STORY_CHOICE_CHOICE_RADIO_ASK, "choice_radio_ask", "Radio"\}/);
+    assert.match(header, /\{EMPATHY_VALUE_BASE_TYPE_ATOM, RADIO_STORY_ATOM_TYPE_CHOICE\}/);
+    assert.match(header, /static const Radio_Story_AtomText radio_story_line_atoms\[\]/);
+    assert.doesNotMatch(header, /_EMPATHY/);
+    assert.doesNotMatch(header, /^#define RADIO_STORY_(?:LINE|CHARACTER|CHOICE)_(?!COUNT)/m);
     line.setData({ ...line.getData(), empathyLineAtom: { value: 1482, key: "for" } });
-    const keyword = generateHeader(compileCanvas(fixture.canvas, variables), "radio story");
-    assert.match(keyword, /RADIO_STORY_EMPATHY_LINE_FOR 1482u/);
+    const keyword = generateHeader(compileCanvas(fixture.canvas, variables), "Radio Story");
+    assert.match(keyword, /RADIO_STORY_LINE_FOR = 1482u/);
     assert.doesNotMatch(keyword, /LINE__FOR/);
     line.setData({ ...line.getData(), empathyLineAtom: { value: 1482, key: "dlg_radio_intro_01" } });
-    const renamed = generateHeader(compileCanvas(fixture.canvas, variables), "radio story");
-    assert.match(renamed, /RADIO_STORY_EMPATHY_LINE_DLG_RADIO_INTRO_01 1482u/);
+    const renamed = generateHeader(compileCanvas(fixture.canvas, variables), "Radio Story");
+    assert.match(renamed, /RADIO_STORY_LINE_DLG_RADIO_INTRO_01 = 1482u/);
     assert.doesNotMatch(renamed, /DLG_RADIO_INTRO_00/);
     line.setData({ ...line.getData(), empathyLineAtom: { value: 1482 } });
-    const removed = generateHeader(compileCanvas(fixture.canvas, variables), "radio story");
-    assert.match(removed, /RADIO_STORY_EMPATHY_LINE_1482 1482u/);
-    assert.match(removed, /\{1482u, 0, "The tower is still transmitting\."\}/);
+    const removed = generateHeader(compileCanvas(fixture.canvas, variables), "Radio Story");
+    assert.match(removed, /RADIO_STORY_LINE_1482 = 1482u/);
+    assert.match(removed, /\{RADIO_STORY_LINE_1482, 0, "The tower is still transmitting\."\}/);
     assert.equal(entry.id, "entry");
 });
 
-test("escapes authored strings as exact UTF-8 bytes in C literals", () => {
+test("keeps authored Unicode readable in UTF-8 C literals", () => {
     const cases: ReadonlyArray<readonly [string, string, string]> = [
         ["ASCII", "Hello world", '"Hello world"'],
-        ["Cyrillic", "Привет, Мара", '"\\320\\237\\321\\200\\320\\270\\320\\262\\320\\265\\321\\202, \\320\\234\\320\\260\\321\\200\\320\\260"'],
-        ["Japanese", "塔はまだ信号を送っている", '"\\345\\241\\224\\343\\201\\257\\343\\201\\276\\343\\201\\240\\344\\277\\241\\345\\217\\267\\343\\202\\222\\351\\200\\201\\343\\201\\243\\343\\201\\246\\343\\201\\204\\343\\202\\213"'],
-        ["Emoji", "The water is rising 🌊", '"The water is rising \\360\\237\\214\\212"'],
+        ["Cyrillic", "Привет, Мара", '"Привет, Мара"'],
+        ["Japanese", "塔はまだ信号を送っている", '"塔はまだ信号を送っている"'],
+        ["Emoji", "The water is rising 🌊", '"The water is rising 🌊"'],
+        ["Question mark", "Куда пойдём?", '"Куда пойдём?"'],
         ["Quotes", 'She said "hello"', '"She said \\"hello\\""'],
-        ["C trigraph safety", "What??/next", '"What\\077\\077/next"'],
+        ["C trigraph safety", "What??/next", '"What?\\?/next"'],
         ["Backslash", "C:\\radio\\tower", '"C:\\\\radio\\\\tower"'],
         ["Newline", "line one\nline two", '"line one\\nline two"'],
         ["Carriage return", "line one\rline two", '"line one\\rline two"'],
@@ -1068,11 +1073,15 @@ test("escapes authored strings as exact UTF-8 bytes in C literals", () => {
     for (const [label, value, expected] of cases) {
         assert.equal(escapeCStringUtf8(value), expected, label);
     }
-    assert.equal(escapeCStringUtf8("À7"), '"\\303\\2007"');
-    assert.doesNotMatch(escapeCStringUtf8("À7"), /\\x/i);
+    assert.equal(escapeCStringUtf8("\u00017"), '"\\0017"');
+    assert.equal(escapeCStringUtf8("\u00857"), '"\\302\\2057"');
+    assert.throws(() => escapeCStringUtf8("\uD800"), /unpaired UTF-16 surrogate/);
+    for (const suffix of ["=", "/", "'", "(", ")", "!", "<", ">", "-"]) {
+        assert.doesNotMatch(escapeCStringUtf8(`??${suffix}`), /\?\?[=\/'()!<>-]/);
+    }
 });
 
-test("uses UTF-8 byte-safe literals for line, character, and choice header tables", () => {
+test("writes readable UTF-8 literals for line, character, and choice header tables", () => {
     const entry = node("entry", EmpathyCanvasNodeKind.ENTRY);
     const say = node("say", EmpathyCanvasNodeKind.SAY, {
         text: "Привет, Мара",
@@ -1091,9 +1100,15 @@ test("uses UTF-8 byte-safe literals for line, character, and choice header table
             new MockEdge("choice-end", choiceNode, end, { empathyChoiceAtom: 73 }),
         ],
     ), variables), "unicode");
-    assert.ok(header.includes(`{1482u, 0, ${escapeCStringUtf8("Привет, Мара")}}`));
+    assert.ok(header.includes(`{UNICODE_LINE_1482, 0, ${escapeCStringUtf8("Привет, Мара")}}`));
     assert.ok(header.includes(`    ${escapeCStringUtf8("塔はまだ信号を送っている")},`));
-    assert.ok(header.includes(`{73u, 0, ${escapeCStringUtf8("The water is rising 🌊")}}`));
+    assert.ok(header.includes(`{UNICODE_CHOICE_73, 0, ${escapeCStringUtf8("The water is rising 🌊")}}`));
+    assert.match(header, /typedef enum unicode_CharacterAtom_t[\s\S]*UNICODE_CHARACTER_0 = 0u/);
+    assert.doesNotMatch(header, /\\(?:320|321|343|345|351|360)/);
+    const bytes = Buffer.from(header, "utf8");
+    assert.ok(bytes.includes(Buffer.from("Привет, Мара", "utf8")));
+    assert.ok(bytes.includes(Buffer.from("塔はまだ信号を送っている", "utf8")));
+    assert.ok(bytes.includes(Buffer.from("The water is rising 🌊", "utf8")));
 });
 
 test("validates optional IDs only when present and scopes uniqueness to atom type", () => {
@@ -1334,33 +1349,65 @@ test("rejects duplicate transmitters for the same portal", () => {
     ), variables), /must have exactly one TRANSMITTER; found 2/);
 });
 
-test("generates multi-table host structs, constants, descriptors, and offsets", () => {
+test("orders case-preserving header sections and emits only the Empathy include", () => {
     const result = compileCanvas(simpleEndGraph().canvas, variables);
-    const header = generateHeader(result, "radio story");
-    assert.match(header, /^#include <stddef\.h>$/m);
-    assert.match(header, /^#include <stdint\.h>$/m);
-    assert.match(header, /typedef struct WorldState[\s\S]*uint8_t radio_found;[\s\S]*float time;[\s\S]*} WorldState;/);
-    assert.match(header, /typedef struct NpcState[\s\S]*float trust;[\s\S]*} NpcState;/);
-    assert.match(header, /typedef struct QuestState[\s\S]*int32_t stage;[\s\S]*} QuestState;/);
-    assert.match(header, /RADIO_STORY_EMPATHY_PARAMETER_TABLE_WORLD = 0/);
-    assert.match(header, /RADIO_STORY_EMPATHY_PARAMETER_TABLE_NPC = 1/);
-    assert.match(header, /RADIO_STORY_EMPATHY_PARAMETER_TABLE_QUEST = 2/);
-    assert.match(header, /RADIO_STORY_EMPATHY_PARAMETER_WORLD_TIME = 2/);
-    assert.match(header, /offsetof\(WorldState, time\)/);
-    assert.match(header, /offsetof\(NpcState, trust\)/);
+    const header = generateHeader(result, "Radio Story");
+    assert.deepEqual(header.match(/^#include .+$/gm), ["#include <empathy.h>"]);
+    assert.doesNotMatch(header, /\bstddef\b/);
+    assert.doesNotMatch(header, /_EMPATHY/);
+    assert.match(header, /typedef struct Radio_Story_WorldState[\s\S]*uint8_t radio_found;[\s\S]*float time;[\s\S]*} Radio_Story_WorldState;/);
+    assert.match(header, /typedef struct Radio_Story_NpcState[\s\S]*float trust;[\s\S]*} Radio_Story_NpcState;/);
+    assert.match(header, /typedef struct Radio_Story_QuestState[\s\S]*int32_t stage;[\s\S]*} Radio_Story_QuestState;/);
+    for (const symbol of [
+        "line_atoms",
+        "character_strings",
+        "choice_atoms",
+        "atom_types",
+        "parameters",
+        "choice_resume_types",
+        "yields",
+        "layout_desc",
+        "entry_points",
+    ]) {
+        assert.match(header, new RegExp(`\\bradio_story_${symbol}\\b`));
+        assert.doesNotMatch(header, new RegExp(`\\bRadio_Story_${symbol}\\b`));
+    }
+    assert.match(header, /RADIO_STORY_PARAMETER_TABLE_WORLD = 0/);
+    assert.match(header, /RADIO_STORY_PARAMETER_TABLE_NPC = 1/);
+    assert.match(header, /RADIO_STORY_PARAMETER_TABLE_QUEST = 2/);
+    assert.match(header, /RADIO_STORY_PARAMETER_WORLD_TIME = 2/);
+    assert.ok(header.includes("#define RADIO_STORY_OFFSET_OF(TYPE, MEMBER) ((uint64_t)&(((TYPE *)0)->MEMBER))"));
+    assert.match(header, /RADIO_STORY_OFFSET_OF\(Radio_Story_WorldState, time\)/);
+    assert.match(header, /RADIO_STORY_OFFSET_OF\(Radio_Story_NpcState, trust\)/);
     assert.match(header, /EMPATHY_VALUE_BASE_TYPE_FLOAT32/);
     assert.match(header, /EMPATHY_PARAMETER_ACCESS_FLAGS_READ,/);
-    assert.match(header, /#define RADIO_STORY_EMPATHY_PARAMETER_TABLE_COUNT 3u/);
-    assert.match(header, /#define RADIO_STORY_EMPATHY_REQUIRED_PARAMETER_TABLE_COUNT 3u/);
-    assert.match(header, /4u, radio_story_empathy_parameters,/);
+    assert.match(header, /#define RADIO_STORY_PARAMETER_TABLE_COUNT 3u/);
+    assert.match(header, /#define RADIO_STORY_REQUIRED_PARAMETER_TABLE_COUNT 3u/);
+    assert.match(header, /4u, radio_story_parameters,/);
+    assert.doesNotMatch(header, /typedef enum Radio_Story_(?:Line|Character|Choice)Atom_t/);
+
+    const pragma = header.indexOf("#pragma once");
+    const include = header.indexOf("#include <empathy.h>");
+    const firstDefine = header.indexOf("#define RADIO_STORY_");
+    const lastDefine = header.lastIndexOf("#define RADIO_STORY_");
+    const firstEnum = header.indexOf("typedef enum Radio_Story_");
+    const lastEnum = header.lastIndexOf("typedef enum Radio_Story_");
+    const firstAtomTexts = header.indexOf("static const Radio_Story_AtomText radio_story_line_atoms[]");
+    const lastAtomTexts = header.indexOf("static const Radio_Story_AtomText radio_story_choice_atoms[]");
+    const descriptors = header.indexOf("static const Empathy_AtomTypeDesc radio_story_atom_types[]");
+    assert.equal(pragma, 0);
+    assert.ok(pragma < include && include < firstDefine);
+    assert.ok(firstDefine <= lastDefine && lastDefine < firstEnum);
+    assert.ok(firstEnum <= lastEnum && lastEnum < firstAtomTexts);
+    assert.ok(firstAtomTexts < lastAtomTexts && lastAtomTexts < descriptors);
 });
 
 test("adds a new parameter table without compiler source changes", () => {
     const expanded = [...variables, { name: "weather.raining", type: "boolean", access: "read" } as NarrativeVariable];
     const result = compileCanvas(simpleEndGraph().canvas, expanded);
     assert.deepEqual(result.tables.at(-1), { name: "weather", index: 3 });
-    assert.match(generateHeader(result, "story"), /STORY_EMPATHY_PARAMETER_TABLE_WEATHER = 3/);
-    assert.match(generateHeader(result, "story"), /typedef struct WeatherState/);
+    assert.match(generateHeader(result, "story"), /STORY_PARAMETER_TABLE_WEATHER = 3/);
+    assert.match(generateHeader(result, "story"), /typedef struct story_WeatherState/);
 });
 
 test("preserves deleted variable strings and reports them as missing", () => {
