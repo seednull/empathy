@@ -1,13 +1,13 @@
 {
     "name": "empathy-canvas-poc",
-    "version": "0.0.3",
+    "version": "0.0.4",
     "private": true,
     "description": "Proof-of-concept Obsidian Canvas compiler for Empathy",
     "main": "main.js",
     "scripts": {
         "build": "npm run typecheck && node esbuild.config.mjs",
         "typecheck": "tsc --noEmit",
-        "test": "esbuild src/compile.test.ts --bundle --platform=node --format=cjs --outfile=compile.test.cjs && node --test compile.test.cjs",
+        "test": "esbuild src/compile.test.ts --bundle --platform=node --format=cjs --outfile=node_modules/.cache/empathy/compile.test.cjs && node --test node_modules/.cache/empathy/compile.test.cjs",
         "verify": "npm test && npm run build"
     },
     "devDependencies": {
