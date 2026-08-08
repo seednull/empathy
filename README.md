@@ -191,20 +191,21 @@ the generator instead of editing those regions directly. The bytecode fields in
 The deliberately small plugin under `plugins/obsidian/` compiles the active Canvas runtime graph
 directly to an Empathy bytecode payload and a companion C/C++ header next to the `.canvas` file.
 
-### Frozen POC baseline
+### Pinned POC environment
 
 Plugin version `0.0.4` targets Obsidian Desktop `1.13.4`; the manifest is
 desktop-only and compatibility with other Obsidian releases is not claimed. Its locked build uses
 Obsidian API typings `1.13.1`—that package version is not the runtime application version. The
 recorded build toolchain is Node.js `22.17.1` with npm `11.4.2`.
 
-Known limitations are deliberate: the plugin depends on undocumented Canvas runtime objects and
-accepts only its current metadata schema, with no migration or backward-compatibility paths.
+Known limitations are deliberate: the plugin depends on the exact undocumented Canvas runtime
+shape in Obsidian Desktop `1.13.4`. Its metadata remains pre-versioned and accepts only the current
+schema; mismatched saved plugin data is rejected instead of migrated, normalized, or reconstructed.
 Standard Canvas cards outside the reachable story graph are ignored, so they can still be used for
 notes. Only nodes reachable from an `ENTRY` are emitted. Multiple entry points are ordered by their
 Canvas node ID. Native Canvas groups remain organizational only. The toolbar and edge integration
-use runtime objects and the internal `canvas:node-menu` / `canvas:edge-menu` workspace events; a
-future Obsidian release may require adapting those small compatibility surfaces.
+use runtime objects and the internal `canvas:node-menu` / `canvas:edge-menu` workspace events. There
+are no alternate runtime-shape branches; a future Obsidian release requires an explicit update.
 
 ### Build and install
 
@@ -311,19 +312,32 @@ integer, and float variables lower to `UINT8`, `INT32`, and `FLOAT32`; access ma
 Empathy parameter access flags. ENTRY nodes without availability predicates use
 `EMPATHY_PROGRAM_OFFSET_NONE` and therefore do not participate in `empathyMatch()`.
 
-Authored LINE and CHOICE atoms have two persistent identities: a numeric value used by the runtime
-and a human-readable key used by generated constants and tooling. Both live directly on the owning
-SAY/LINE node or CHOICE option. The plugin allocates numeric values monotonically per atom type and
-generates a lowercase slug key once; moving cards, reordering options, or editing display text does
-not change either identity. The POC accepts only this current metadata shape: missing atoms and
-non-atom CHOICE options remain validation errors and are never rewritten automatically. Native
-duplication of an already-known node receives fresh values and collision-suffixed keys.
+Every authored LINE and CHOICE atom has a persistent numeric value used as its mandatory runtime
+identity. The plugin allocates those values monotonically per atom type and stores them directly on
+the owning SAY/LINE node or CHOICE option. Moving cards, reordering options, and editing display text
+do not change numeric identity. Missing, invalid, or duplicate numeric atoms remain compilation
+errors. Atom records accept only `value` and optional `key`; obsolete lifecycle fields and the old
+index-based CHOICE edge metadata are rejected rather than rewritten. Native duplication of an
+already-known node receives fresh numeric values.
 
-The Atoms section derives its rows from the active Canvas rather than a separate registry. It can
-search keys, display text, and numeric values; rename or explicitly regenerate a key; copy either
-identity; and select/zoom to the owning node. CHOICE source lookup uses node ID plus stable choice
-atom value, so it continues to resolve the same option after reordering. Numeric values are read-only
-in this UI.
+A separate human-readable atom ID is optional. IDs use the deliberately small ASCII grammar
+`[a-z][a-z0-9_]*`, are at most 64 characters, and are unique within LINE or CHOICE atoms. New atoms
+remain unassigned until the author explicitly generates an ID in the Atoms section, after which it
+can be replaced with the project's preferred name in the inline editor.
+Generation uses the current display text, including a small deterministic Cyrillic-to-Latin
+transliteration; unusable text falls back to `line_<value>` or `choice_<value>`, and collisions receive
+`_2`, `_3`, and so on. Once assigned, normal text edits never rewrite an ID. Regenerate is explicit,
+and clearing the inline editor returns the atom to its valid unnamed state. IDs are project/tooling
+identifiers rather than localized labels and are not displayed on normal Canvas cards.
+
+The Atoms section derives one flat list from the active Canvas rather than a separate registry. Each
+compact row keeps the inline ID editor, authored text, Generate/Regenerate, and source navigation on
+one line. An unnamed atom displays a non-persisted `<node-kind>_<value>` stub such as `say_1482` or
+`choice_73`; clearing a project ID restores that stub. Rows sort lexicographically by their project ID
+or stub, so shared project prefixes naturally stay together. Numeric values are not shown separately,
+and atom/node type labels remain absent. Search covers the displayed ID or stub, authored text, and
+character. CHOICE source lookup uses node ID plus stable choice atom value, so it continues to resolve
+the same option after reordering. No identifier groups or separate atom registry are persisted.
 
 CHOICE runtime requests now contain only the visible CHOICE atoms on the yield stack, in authored
 display order. The host obtains the count with `empathyGetYieldStackSize()`, presents those atoms,
@@ -335,9 +349,12 @@ ends without producing an empty CHOICE yield.
 Compilation performs lightweight structural and type validation before writing either artifact.
 Invalid nodes and edges receive Canvas styling/tooltips, and the compile Notice reports the first
 error plus a remaining count. The generated header includes `<stddef.h>` and `<stdint.h>`, stable
-key-derived LINE/CHOICE constants and atom text tables, one native
-state struct per derived table, table and global parameter constants, parameter descriptors using
-`offsetof()` against the correct struct, and the required parameter-table count for
+ID-derived LINE/CHOICE constants when an ID exists, numeric-fallback constants for unassigned atoms,
+and atom text tables whose optional ID pointer is null when unassigned. Authored LINE, CHOICE, and
+character display strings are encoded from JavaScript text to explicit UTF-8 bytes in C literals;
+printable ASCII stays readable while non-ASCII bytes use fixed-width octal escapes. The header also
+contains one native state struct per derived table, table and global parameter constants, parameter
+descriptors using `offsetof()` against the correct struct, and the required parameter-table count for
 `Empathy_MachineDesc.max_parameter_tables`. TypeScript deliberately does not emulate native struct
 padding.
 
