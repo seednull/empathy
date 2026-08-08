@@ -22,6 +22,11 @@
     --empathy-node-accent: var(--color-cyan);
 }
 
+.empathy-canvas-node-portal-receiver,
+.empathy-canvas-node-portal-transmitter {
+    --empathy-node-accent: var(--color-yellow, var(--interactive-accent));
+}
+
 .empathy-canvas-node-end {
     --empathy-node-accent: var(--color-red);
 }
@@ -71,6 +76,11 @@
 
 .canvas-card-menu .empathy-canvas-toolbar-button[data-empathy-kind="set"] {
     --empathy-toolbar-accent: var(--color-cyan);
+}
+
+.canvas-card-menu .empathy-canvas-toolbar-button[data-empathy-kind="portal-receiver"],
+.canvas-card-menu .empathy-canvas-toolbar-button[data-empathy-kind="portal-transmitter"] {
+    --empathy-toolbar-accent: var(--color-yellow, var(--interactive-accent));
 }
 
 .canvas-card-menu .empathy-canvas-toolbar-button svg {
@@ -193,7 +203,9 @@
     white-space: nowrap;
 }
 
-.empathy-canvas-character-input {
+.empathy-canvas-character-input,
+.empathy-canvas-portal-input,
+.empathy-canvas-portal-select {
     min-width: 48px;
     height: 26px;
     flex: 1 1 auto;
@@ -210,7 +222,9 @@
     pointer-events: auto;
 }
 
-.empathy-canvas-character-input:focus {
+.empathy-canvas-character-input:focus,
+.empathy-canvas-portal-input:focus,
+.empathy-canvas-portal-select:focus {
     border-color: var(--empathy-node-accent);
     box-shadow: 0 0 0 1px var(--empathy-node-accent);
     outline: none;
@@ -249,8 +263,15 @@
     gap: 8px;
 }
 
-.empathy-canvas-node-title .empathy-canvas-character-input {
+.empathy-canvas-node-title .empathy-canvas-character-input,
+.empathy-canvas-node-title .empathy-canvas-portal-input,
+.empathy-canvas-node-title .empathy-canvas-portal-select {
     margin-inline-start: auto;
+}
+
+.empathy-canvas-portal-input,
+.empathy-canvas-portal-select {
+    width: 120px;
 }
 
 .empathy-node-controls {

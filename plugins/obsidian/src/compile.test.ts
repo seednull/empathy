@@ -39,6 +39,17 @@ function node(id: string, kind: string, data: Partial<CanvasNodeData> = {}): Moc
     return new MockNode(id, { text: kind === EmpathyCanvasNodeKind.ENTRY ? id : "", empathyKind: kind, ...data });
 }
 
+function portalNode(
+    id: string,
+    kind: typeof EmpathyCanvasNodeKind.PORTAL_RECEIVER | typeof EmpathyCanvasNodeKind.PORTAL_TRANSMITTER,
+    portalId = "portal-a",
+): MockNode {
+    return node(id, kind, {
+        empathyPortalId: portalId,
+        ...(kind === EmpathyCanvasNodeKind.PORTAL_TRANSMITTER ? { empathyPortalName: "A" } : {}),
+    });
+}
+
 function graph(nodes: MockNode[], edges: MockEdge[]): Canvas {
     return {
         nodes: new Map(nodes.map((value) => [value.id, value])),
@@ -389,6 +400,112 @@ test("emits a converging target exactly once", () => {
     assert.equal(result.nodeOffsets.get("end") !== undefined, true);
 });
 
+test("routes multiple receivers and incoming branches through one transmitter", () => {
+    const entry = node("entry", EmpathyCanvasNodeKind.ENTRY);
+    const choice = node("choice", EmpathyCanvasNodeKind.CHOICE, { empathyChoices: ["One", "Two", "Three"] });
+    const receiverA = portalNode("receiver-a", EmpathyCanvasNodeKind.PORTAL_RECEIVER);
+    const receiverB = portalNode("receiver-b", EmpathyCanvasNodeKind.PORTAL_RECEIVER);
+    const transmitter = portalNode("transmitter", EmpathyCanvasNodeKind.PORTAL_TRANSMITTER);
+    const end = node("end", EmpathyCanvasNodeKind.END);
+    const canvas = graph(
+        [entry, choice, receiverA, receiverB, transmitter, end],
+        [
+            new MockEdge("entry-choice", entry, choice),
+            new MockEdge("choice-one", choice, receiverA, { empathyChoiceIndex: 0 }),
+            new MockEdge("choice-two", choice, receiverA, { empathyChoiceIndex: 1 }),
+            new MockEdge("choice-three", choice, receiverB, { empathyChoiceIndex: 2 }),
+            new MockEdge("transmitter-end", transmitter, end),
+        ],
+    );
+    const result = compileCanvas(canvas, variables);
+    const endOffset = result.nodeOffsets.get("end")!;
+    for (const receiver of [receiverA, receiverB]) {
+        const receiverOffset = result.nodeOffsets.get(receiver.id)!;
+        assert.equal(result.bytecode[receiverOffset], EmpathyBytecodeOpcode.JUMP);
+        assert.equal(Number(view(result.bytecode).getBigUint64(receiverOffset + 1, true)), endOffset);
+    }
+    assert.equal(result.nodeOffsets.has("transmitter"), false);
+    assert.equal(Array.from(canvas.edges.values()).some((edge) =>
+        (edge.from?.node === receiverA || edge.from?.node === receiverB) && edge.to?.node === transmitter), false);
+});
+
+test("rejects an outgoing visual edge from a portal receiver", () => {
+    const entry = node("entry", EmpathyCanvasNodeKind.ENTRY);
+    const receiver = portalNode("receiver", EmpathyCanvasNodeKind.PORTAL_RECEIVER);
+    const transmitter = portalNode("transmitter", EmpathyCanvasNodeKind.PORTAL_TRANSMITTER);
+    const end = node("end", EmpathyCanvasNodeKind.END);
+    assert.throws(() => compileCanvas(graph(
+        [entry, receiver, transmitter, end],
+        [
+            new MockEdge("entry-receiver", entry, receiver),
+            new MockEdge("receiver-end", receiver, end),
+            new MockEdge("transmitter-end", transmitter, end),
+        ],
+    ), variables), /RECEIVER must not have outgoing visual edges/);
+});
+
+test("rejects an incoming visual edge to a portal transmitter", () => {
+    const entry = node("entry", EmpathyCanvasNodeKind.ENTRY);
+    const receiver = portalNode("receiver", EmpathyCanvasNodeKind.PORTAL_RECEIVER);
+    const transmitter = portalNode("transmitter", EmpathyCanvasNodeKind.PORTAL_TRANSMITTER);
+    const end = node("end", EmpathyCanvasNodeKind.END);
+    assert.throws(() => compileCanvas(graph(
+        [entry, receiver, transmitter, end],
+        [new MockEdge("entry-transmitter", entry, transmitter), new MockEdge("transmitter-end", transmitter, end)],
+    ), variables), /TRANSMITTER cannot accept incoming visual edges/);
+});
+
+test("requires a portal transmitter continuation", () => {
+    const entry = node("entry", EmpathyCanvasNodeKind.ENTRY);
+    const receiver = portalNode("receiver", EmpathyCanvasNodeKind.PORTAL_RECEIVER);
+    const transmitter = portalNode("transmitter", EmpathyCanvasNodeKind.PORTAL_TRANSMITTER);
+    assert.throws(() => compileCanvas(graph(
+        [entry, receiver, transmitter],
+        [new MockEdge("entry-receiver", entry, receiver)],
+    ), variables), /TRANSMITTER must have exactly one outgoing edge; found 0/);
+});
+
+test("rejects multiple portal transmitter continuations", () => {
+    const entry = node("entry", EmpathyCanvasNodeKind.ENTRY);
+    const receiver = portalNode("receiver", EmpathyCanvasNodeKind.PORTAL_RECEIVER);
+    const transmitter = portalNode("transmitter", EmpathyCanvasNodeKind.PORTAL_TRANSMITTER);
+    const first = node("first", EmpathyCanvasNodeKind.END);
+    const second = node("second", EmpathyCanvasNodeKind.END);
+    assert.throws(() => compileCanvas(graph(
+        [entry, receiver, transmitter, first, second],
+        [
+            new MockEdge("entry-receiver", entry, receiver),
+            new MockEdge("transmitter-first", transmitter, first),
+            new MockEdge("transmitter-second", transmitter, second),
+        ],
+    ), variables), /TRANSMITTER must have exactly one outgoing edge; found 2/);
+});
+
+test("requires exactly one transmitter for a reachable portal", () => {
+    const entry = node("entry", EmpathyCanvasNodeKind.ENTRY);
+    const receiver = portalNode("receiver", EmpathyCanvasNodeKind.PORTAL_RECEIVER);
+    assert.throws(() => compileCanvas(graph(
+        [entry, receiver],
+        [new MockEdge("entry-receiver", entry, receiver)],
+    ), variables), /must have exactly one TRANSMITTER; found 0/);
+});
+
+test("rejects duplicate transmitters for the same portal", () => {
+    const entry = node("entry", EmpathyCanvasNodeKind.ENTRY);
+    const receiver = portalNode("receiver", EmpathyCanvasNodeKind.PORTAL_RECEIVER);
+    const transmitterA = portalNode("transmitter-a", EmpathyCanvasNodeKind.PORTAL_TRANSMITTER);
+    const transmitterB = portalNode("transmitter-b", EmpathyCanvasNodeKind.PORTAL_TRANSMITTER);
+    const end = node("end", EmpathyCanvasNodeKind.END);
+    assert.throws(() => compileCanvas(graph(
+        [entry, receiver, transmitterA, transmitterB, end],
+        [
+            new MockEdge("entry-receiver", entry, receiver),
+            new MockEdge("transmitter-a-end", transmitterA, end),
+            new MockEdge("transmitter-b-end", transmitterB, end),
+        ],
+    ), variables), /must have exactly one TRANSMITTER; found 2/);
+});
+
 test("generates multi-table host structs, constants, descriptors, and offsets", () => {
     const result = compileCanvas(simpleEndGraph().canvas, variables);
     const header = generateHeader(result, "radio story");
@@ -447,9 +564,13 @@ test("converts nodes to SET metadata without retaining unrelated semantic fields
         empathyKind: EmpathyCanvasNodeKind.SAY,
         empathyCharacter: "Mara",
         empathyEntryMatchValue: "12",
+        empathyPortalId: "stale-portal",
+        empathyPortalName: "Stale portal",
     }, EmpathyCanvasNodeKind.SET);
     assert.equal(converted.empathyKind, EmpathyCanvasNodeKind.SET);
     assert.deepEqual(converted.empathyAssignments, [{ variable: "", operation: "=", literal: "" }]);
     assert.equal(converted.empathyCharacter, undefined);
     assert.equal(converted.empathyEntryMatchValue, undefined);
+    assert.equal(converted.empathyPortalId, undefined);
+    assert.equal(converted.empathyPortalName, undefined);
 });

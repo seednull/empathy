@@ -107,10 +107,12 @@ const requiredCanvasMethods = [
 ] as const;
 
 const nodeLabels: Record<EmpathyCanvasNodeKind, string> = {
-    entry: "ENTRY", say: "SAY", line: "LINE", choice: "CHOICE", set: "SET", end: "END",
+    entry: "ENTRY", say: "SAY", line: "LINE", choice: "CHOICE", set: "SET",
+    "portal-receiver": "RECEIVER", "portal-transmitter": "TRANSMITTER", end: "END",
 };
 const nodeIcons: Record<EmpathyCanvasNodeKind, string> = {
-    entry: "log-in", say: "message-square-quote", line: "text", choice: "list-tree", set: "variable", end: "square",
+    entry: "log-in", say: "message-square-quote", line: "text", choice: "list-tree", set: "variable",
+    "portal-receiver": "log-in", "portal-transmitter": "log-out", end: "square",
 };
 const nodeSizes: Record<EmpathyCanvasNodeKind, CanvasSize> = {
     entry: { width: 390, height: 180 },
@@ -118,17 +120,40 @@ const nodeSizes: Record<EmpathyCanvasNodeKind, CanvasSize> = {
     line: { width: 360, height: 160 },
     choice: { width: 360, height: 180 },
     set: { width: 430, height: 220 },
+    "portal-receiver": { width: 300, height: 100 },
+    "portal-transmitter": { width: 300, height: 100 },
     end: { width: 220, height: 100 },
 };
 const nodeSymbols: Record<EmpathyCanvasNodeKind, string> = {
-    entry: "↦", say: "“", line: "¶", choice: "◇", set: "=", end: "■",
+    entry: "↦", say: "“", line: "¶", choice: "◇", set: "=",
+    "portal-receiver": "↓", "portal-transmitter": "↑", end: "■",
 };
 const nodeHints: Partial<Record<EmpathyCanvasNodeKind, string>> = {
-    entry: "START", line: "NARRATION", choice: "ORDERED OPTIONS", set: "STATE CHANGE", end: "STOP",
+    entry: "START", line: "NARRATION", choice: "ORDERED OPTIONS", set: "STATE CHANGE",
+    "portal-receiver": "PORTAL IN", "portal-transmitter": "PORTAL OUT", end: "STOP",
 };
 const nodeKinds = Object.values(EmpathyCanvasNodeKind);
+const creationNodeKinds: readonly EmpathyCanvasNodeKind[] = [
+    EmpathyCanvasNodeKind.ENTRY,
+    EmpathyCanvasNodeKind.SAY,
+    EmpathyCanvasNodeKind.LINE,
+    EmpathyCanvasNodeKind.CHOICE,
+    EmpathyCanvasNodeKind.SET,
+    EmpathyCanvasNodeKind.PORTAL_RECEIVER,
+    EmpathyCanvasNodeKind.PORTAL_TRANSMITTER,
+    EmpathyCanvasNodeKind.END,
+];
+const convertibleNodeKinds: readonly EmpathyCanvasNodeKind[] = [
+    EmpathyCanvasNodeKind.ENTRY,
+    EmpathyCanvasNodeKind.SAY,
+    EmpathyCanvasNodeKind.LINE,
+    EmpathyCanvasNodeKind.CHOICE,
+    EmpathyCanvasNodeKind.SET,
+    EmpathyCanvasNodeKind.END,
+];
 const nodeSemanticKeys = [
     "empathyCharacter", "empathyAssignments", "empathyEntryCondition", "empathyEntryMatchValue", "empathyChoices",
+    "empathyPortalId", "empathyPortalName",
 ] as const;
 const edgeSemanticKeys = ["empathyCondition", "empathyElse", "empathyConditionOrder", "empathyChoiceIndex"] as const;
 
@@ -328,7 +353,7 @@ export class EmpathyCanvasIntegration {
         };
         const wrappedShowCreationMenu: RuntimeCanvas["showCreationMenu"] = (menu, pos, size) => {
             if (!this.disposed && !runtime.readonly) {
-                for (const kind of nodeKinds) {
+                for (const kind of creationNodeKinds) {
                     menu.addItem((item) => item.setTitle(`Add Empathy ${nodeLabels[kind]}`).setSection("create")
                         .setIcon(nodeIcons[kind]).onClick(() => this.tryCreateNode(runtime, kind, pos, size)));
                 }
@@ -365,24 +390,94 @@ export class EmpathyCanvasIntegration {
         const runtime = this.patchCanvas(canvas);
         if (runtime.readonly) throw new Error("active Canvas is read-only");
         const centered = pos === undefined;
-        const node = runtime.createTextNode({
-            pos: pos ?? runtime.posCenter(),
-            size: requestedSize ?? nodeSizes[kind],
-            position: centered ? "center" : undefined,
-            text: initialText(kind),
-            save: false,
-            focus: false,
-        });
-        node.setData({ ...node.getData(), type: "text", text: initialText(kind), empathyKind: kind, ...semanticDefaults(kind) });
-        node.attach();
-        node.render();
+        let metadata: Partial<CanvasNodeData> = {};
+        if (kind === EmpathyCanvasNodeKind.PORTAL_TRANSMITTER) {
+            metadata = { empathyPortalId: this.newPortalId(runtime), empathyPortalName: this.newPortalName(runtime) };
+        } else if (kind === EmpathyCanvasNodeKind.PORTAL_RECEIVER) {
+            const transmitters = this.portalTransmitters(runtime);
+            metadata = {
+                empathyPortalId: transmitters.length === 1
+                    ? String(transmitters[0].getData().empathyPortalId ?? "")
+                    : "",
+            };
+        }
+        const node = this.createTypedNode(
+            runtime,
+            kind,
+            pos ?? runtime.posCenter(),
+            requestedSize ?? nodeSizes[kind],
+            centered,
+            metadata,
+        );
         runtime.selectOnly(node);
         runtime.markDirty(node);
         runtime.requestSave();
         if (kind === EmpathyCanvasNodeKind.SAY) this.focusCharacterField(node);
         else if (kind === EmpathyCanvasNodeKind.LINE || kind === EmpathyCanvasNodeKind.ENTRY) node.startEditing();
         else if (kind === EmpathyCanvasNodeKind.SET) this.focusVariablePicker(node);
+        else if (kind === EmpathyCanvasNodeKind.PORTAL_RECEIVER) this.focusPortalReceiver(node);
+        else if (kind === EmpathyCanvasNodeKind.PORTAL_TRANSMITTER) this.focusPortalName(node);
         return node;
+    }
+
+    private createTypedNode(
+        runtime: RuntimeCanvas,
+        kind: EmpathyCanvasNodeKind,
+        pos: CanvasPoint,
+        size: CanvasSize,
+        centered: boolean,
+        metadata: Partial<CanvasNodeData> = {},
+    ): RuntimeCanvasNode {
+        const node = runtime.createTextNode({
+            pos,
+            size,
+            position: centered ? "center" : undefined,
+            text: initialText(kind),
+            save: false,
+            focus: false,
+        });
+        node.setData({
+            ...node.getData(),
+            type: "text",
+            text: initialText(kind),
+            empathyKind: kind,
+            ...semanticDefaults(kind),
+            ...metadata,
+        });
+        node.attach();
+        node.render();
+        return node;
+    }
+
+    private newPortalId(canvas: RuntimeCanvas): string {
+        const ids = new Set(Array.from(canvas.nodes.values(), (node) => node.getData().empathyPortalId));
+        const crypto = canvas.menu.menuEl.ownerDocument.defaultView?.crypto;
+        let id: string;
+        do {
+            const random = crypto?.getRandomValues(new Uint32Array(2));
+            id = random
+                ? `portal-${Array.from(random, (value) => value.toString(16).padStart(8, "0")).join("")}`
+                : `portal-${Date.now().toString(16)}-${Math.floor(Math.random() * 0xFFFFFFFF).toString(16)}`;
+        } while (ids.has(id));
+        return id;
+    }
+
+    private newPortalName(canvas: RuntimeCanvas): string {
+        const names = new Set(Array.from(canvas.nodes.values(), (node) => node.getData().empathyPortalName));
+        for (let suffix = 1; ; ++suffix) {
+            const name = `Portal ${suffix}`;
+            if (!names.has(name)) return name;
+        }
+    }
+
+    private portalTransmitters(canvas: RuntimeCanvas): RuntimeCanvasNode[] {
+        return Array.from(canvas.nodes.values() as IterableIterator<RuntimeCanvasNode>)
+            .filter((node) => getEmpathyCanvasNodeKind(node.getData()) === EmpathyCanvasNodeKind.PORTAL_TRANSMITTER)
+            .sort((left, right) => {
+                const leftName = String(left.getData().empathyPortalName ?? "");
+                const rightName = String(right.getData().empathyPortalName ?? "");
+                return leftName.localeCompare(rightName);
+            });
     }
 
     private syncToolbar(patch: CanvasPatch): void {
@@ -395,7 +490,7 @@ export class EmpathyCanvasIntegration {
         toolbar.className = "empathy-canvas-toolbar";
         toolbar.setAttribute("role", "group");
         toolbar.setAttribute("aria-label", "Empathy authoring tools");
-        for (const kind of nodeKinds) {
+        for (const kind of creationNodeKinds) {
             const button = this.toolbarButton(host.ownerDocument, `Add Empathy ${nodeLabels[kind]}`, nodeIcons[kind], () => this.tryCreateNode(patch.canvas, kind));
             button.dataset.empathyKind = kind;
             toolbar.append(button);
@@ -755,6 +850,17 @@ export class EmpathyCanvasIntegration {
                 return JSON.stringify([kind, data.empathyAssignments]);
             case EmpathyCanvasNodeKind.ENTRY:
                 return JSON.stringify([kind, data.empathyEntryCondition, data.empathyEntryMatchValue]);
+            case EmpathyCanvasNodeKind.PORTAL_RECEIVER:
+                return JSON.stringify([
+                    kind,
+                    data.empathyPortalId,
+                    ...this.portalTransmitters(node.canvas).map((transmitter) => {
+                        const transmitterData = transmitter.getData();
+                        return [transmitterData.empathyPortalId, transmitterData.empathyPortalName];
+                    }),
+                ]);
+            case EmpathyCanvasNodeKind.PORTAL_TRANSMITTER:
+                return JSON.stringify([kind, data.empathyPortalId]);
             default:
                 return kind;
         }
@@ -796,6 +902,8 @@ export class EmpathyCanvasIntegration {
             else if (kind === EmpathyCanvasNodeKind.SET) this.addSetControls(node, header, data);
             else if (kind === EmpathyCanvasNodeKind.ENTRY) this.addEntryControls(node, header, data);
             else if (kind === EmpathyCanvasNodeKind.CHOICE) this.addChoiceControls(patch, node, header, data);
+            else if (kind === EmpathyCanvasNodeKind.PORTAL_RECEIVER) this.addPortalReceiverControl(patch, node, header);
+            else if (kind === EmpathyCanvasNodeKind.PORTAL_TRANSMITTER) this.addPortalTransmitterControl(patch, node, header);
             node.nodeEl.append(header);
             nodePatch.headerEl = header;
             nodePatch.signature = signature;
@@ -805,6 +913,19 @@ export class EmpathyCanvasIntegration {
             const character = typeof data.empathyCharacter === "string" ? data.empathyCharacter : "";
             if (input && node.nodeEl.ownerDocument.activeElement !== input) input.value = character;
             if (input) input.disabled = Boolean(node.canvas.readonly || node.isEditing || node.nodeEl.classList.contains("is-editing"));
+        }
+        if (kind === EmpathyCanvasNodeKind.PORTAL_TRANSMITTER) {
+            const input = nodePatch.headerEl.querySelector<HTMLInputElement>(".empathy-canvas-portal-input");
+            const name = typeof data.empathyPortalName === "string" ? data.empathyPortalName : "";
+            if (input && node.nodeEl.ownerDocument.activeElement !== input) input.value = name;
+            if (input) input.disabled = node.canvas.readonly;
+        }
+        if (kind === EmpathyCanvasNodeKind.PORTAL_RECEIVER) {
+            const select = nodePatch.headerEl.querySelector<HTMLSelectElement>(".empathy-canvas-portal-select");
+            if (select) {
+                select.value = typeof data.empathyPortalId === "string" ? data.empathyPortalId : "";
+                select.disabled = node.canvas.readonly;
+            }
         }
         const controls = nodePatch.headerEl.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLButtonElement>(
             ".empathy-node-controls input, .empathy-node-controls select, .empathy-node-controls button",
@@ -868,6 +989,53 @@ export class EmpathyCanvasIntegration {
         input.addEventListener("blur", () => this.flushCharacterSave(patch, node));
         stopCanvasEvents(input);
         header.querySelector(".empathy-canvas-node-title")!.append(input);
+    }
+
+    private addPortalTransmitterControl(patch: CanvasPatch, node: RuntimeCanvasNode, header: HTMLElement): void {
+        const input = header.ownerDocument.createElement("input");
+        input.className = "empathy-canvas-portal-input";
+        input.type = "text";
+        input.placeholder = "Portal name";
+        input.value = typeof node.getData().empathyPortalName === "string" ? node.getData().empathyPortalName! : "";
+        input.addEventListener("input", () => this.updatePortalName(patch, node, input.value));
+        input.addEventListener("change", () => {
+            if (!node.canvas.readonly) node.canvas.requestSave();
+        });
+        stopCanvasEvents(input);
+        header.querySelector(".empathy-canvas-node-title")!.append(input);
+    }
+
+    private addPortalReceiverControl(patch: CanvasPatch, node: RuntimeCanvasNode, header: HTMLElement): void {
+        const select = header.ownerDocument.createElement("select");
+        select.className = "empathy-canvas-portal-select";
+        const empty = header.ownerDocument.createElement("option");
+        empty.value = "";
+        empty.textContent = "Select transmitter…";
+        select.append(empty);
+        const selected = typeof node.getData().empathyPortalId === "string" ? node.getData().empathyPortalId! : "";
+        let selectedExists = selected.length === 0;
+        for (const transmitter of this.portalTransmitters(node.canvas)) {
+            const data = transmitter.getData();
+            const portalId = typeof data.empathyPortalId === "string" ? data.empathyPortalId : "";
+            if (portalId.length === 0) continue;
+            const option = header.ownerDocument.createElement("option");
+            option.value = portalId;
+            option.textContent = typeof data.empathyPortalName === "string" && data.empathyPortalName.trim().length > 0
+                ? data.empathyPortalName
+                : "Unnamed transmitter";
+            select.append(option);
+            if (portalId === selected) selectedExists = true;
+        }
+        if (!selectedExists) {
+            const missing = header.ownerDocument.createElement("option");
+            missing.value = selected;
+            missing.textContent = "Missing transmitter";
+            select.append(missing);
+        }
+        select.value = selected;
+        select.addEventListener("change", () => this.updatePortalReceiver(patch, node, select.value));
+        stopCanvasEvents(select);
+        header.querySelector(".empathy-canvas-node-title")!.append(select);
     }
 
     private addSetControls(node: RuntimeCanvasNode, header: HTMLElement, data: CanvasNodeData): void {
@@ -1364,13 +1532,18 @@ export class EmpathyCanvasIntegration {
     private addNodeMenuItems(menu: Menu, node: RuntimeCanvasNode): void {
         if (this.disposed || node.canvas.readonly || node.getData().type !== "text") return;
         const current = getEmpathyCanvasNodeKind(node.getData());
-        for (const kind of nodeKinds) {
+        for (const kind of convertibleNodeKinds) {
             menu.addItem((item) => item.setTitle(`Set as Empathy ${nodeLabels[kind]}`).setSection("action")
                 .setIcon(nodeIcons[kind]).setChecked(current === kind).onClick(() => this.setNodeKind(node, kind)));
         }
         if (
             current &&
-            (current === EmpathyCanvasNodeKind.SAY || current === EmpathyCanvasNodeKind.LINE || current === EmpathyCanvasNodeKind.SET) &&
+            (
+                current === EmpathyCanvasNodeKind.SAY ||
+                current === EmpathyCanvasNodeKind.LINE ||
+                current === EmpathyCanvasNodeKind.SET ||
+                current === EmpathyCanvasNodeKind.PORTAL_TRANSMITTER
+            ) &&
             this.outgoingRuntimeEdges(node.canvas, node).length === 0
         ) {
             for (const kind of [
@@ -1378,6 +1551,7 @@ export class EmpathyCanvasIntegration {
                 EmpathyCanvasNodeKind.LINE,
                 EmpathyCanvasNodeKind.CHOICE,
                 EmpathyCanvasNodeKind.SET,
+                EmpathyCanvasNodeKind.PORTAL_RECEIVER,
                 EmpathyCanvasNodeKind.END,
             ]) {
                 menu.addItem((item) => item.setTitle(`Continue with Empathy ${nodeLabels[kind]}`).setSection("create")
@@ -1397,32 +1571,39 @@ export class EmpathyCanvasIntegration {
         const height = typeof sourceData.height === "number" ? sourceData.height : 160;
         try {
             const target = this.createNode(canvas, kind, { x, y: y + height + 100 }, nodeSizes[kind]);
-            const sourceId = source.id ?? sourceData.id;
-            const targetData = target.getData();
-            const targetId = target.id ?? targetData.id;
-            if (!sourceId || !targetId) throw new Error("Canvas did not assign node ids");
-            const random = source.nodeEl.ownerDocument.defaultView?.crypto.getRandomValues(new Uint32Array(2));
-            let edgeId = random
-                ? Array.from(random, (value) => value.toString(16).padStart(8, "0")).join("")
-                : `${Date.now().toString(16)}${Math.floor(Math.random() * 0xFFFFFFFF).toString(16).padStart(8, "0")}`;
-            while (canvas.edges.has(edgeId)) edgeId += "0";
-            canvas.importData({
-                nodes: [sourceData, targetData],
-                edges: [{
-                    id: edgeId,
-                    fromNode: sourceId,
-                    fromSide: "bottom",
-                    toNode: targetId,
-                    toSide: "top",
-                }],
-            }, false);
-            canvas.requestSave();
+            this.connectNodes(source, target);
             if (kind === EmpathyCanvasNodeKind.SAY) this.focusCharacterField(target);
             else if (kind === EmpathyCanvasNodeKind.LINE) target.startEditing();
             else if (kind === EmpathyCanvasNodeKind.SET) this.focusVariablePicker(target);
+            else if (kind === EmpathyCanvasNodeKind.PORTAL_RECEIVER) this.focusPortalReceiver(target);
         } catch (error) {
             this.ui.showNotice(`Empathy continuation creation failed: ${error instanceof Error ? error.message : String(error)}`);
         }
+    }
+
+    private connectNodes(source: RuntimeCanvasNode, target: RuntimeCanvasNode): void {
+        const canvas = source.canvas;
+        const sourceData = source.getData();
+        const targetData = target.getData();
+        const sourceId = source.id ?? sourceData.id;
+        const targetId = target.id ?? targetData.id;
+        if (!sourceId || !targetId) throw new Error("Canvas did not assign node ids");
+        const random = source.nodeEl.ownerDocument.defaultView?.crypto.getRandomValues(new Uint32Array(2));
+        let edgeId = random
+            ? Array.from(random, (value) => value.toString(16).padStart(8, "0")).join("")
+            : `${Date.now().toString(16)}${Math.floor(Math.random() * 0xFFFFFFFF).toString(16).padStart(8, "0")}`;
+        while (canvas.edges.has(edgeId)) edgeId += "0";
+        canvas.importData({
+            nodes: [sourceData, targetData],
+            edges: [{
+                id: edgeId,
+                fromNode: sourceId,
+                fromSide: "bottom",
+                toNode: targetId,
+                toSide: "top",
+            }],
+        }, false);
+        canvas.requestSave();
     }
 
     private setNodeKind(node: RuntimeCanvasNode, kind: EmpathyCanvasNodeKind): void {
@@ -1439,6 +1620,28 @@ export class EmpathyCanvasIntegration {
         node.setData(data);
         node.canvas.markDirty(node);
         node.canvas.requestSave();
+    }
+
+    private updatePortalName(patch: CanvasPatch, node: RuntimeCanvasNode, name: string): void {
+        if (node.canvas.readonly) return;
+        const data = node.getData();
+        if (getEmpathyCanvasNodeKind(data) !== EmpathyCanvasNodeKind.PORTAL_TRANSMITTER) return;
+        node.setData({ ...data, empathyPortalName: name });
+        patch.canvas.markDirty(node);
+        for (const [candidate, nodePatch] of patch.nodes) {
+            if (getEmpathyCanvasNodeKind(candidate.getData()) !== EmpathyCanvasNodeKind.PORTAL_RECEIVER) continue;
+            nodePatch.signature = undefined;
+            this.decorateNode(patch, candidate);
+        }
+    }
+
+    private updatePortalReceiver(patch: CanvasPatch, node: RuntimeCanvasNode, portalId: string): void {
+        if (node.canvas.readonly) return;
+        const data = node.getData();
+        if (getEmpathyCanvasNodeKind(data) !== EmpathyCanvasNodeKind.PORTAL_RECEIVER) return;
+        node.setData({ ...data, empathyPortalId: portalId });
+        patch.canvas.markDirty(node);
+        patch.canvas.requestSave();
     }
 
     private updateCharacter(patch: CanvasPatch, node: RuntimeCanvasNode, character: string): void {
@@ -1531,6 +1734,8 @@ export class EmpathyCanvasIntegration {
     }
     private focusCharacterField(node: RuntimeCanvasNode): void { node.nodeEl.querySelector<HTMLInputElement>(".empathy-canvas-character-input")?.focus(); }
     private focusVariablePicker(node: RuntimeCanvasNode): void { node.nodeEl.querySelector<HTMLInputElement>(".empathy-variable-picker input")?.focus(); }
+    private focusPortalReceiver(node: RuntimeCanvasNode): void { node.nodeEl.querySelector<HTMLSelectElement>(".empathy-canvas-portal-select")?.focus(); }
+    private focusPortalName(node: RuntimeCanvasNode): void { node.nodeEl.querySelector<HTMLInputElement>(".empathy-canvas-portal-input")?.focus(); }
     private unload(): void {
         this.disposed = true;
         for (const canvas of Array.from(this.patches.keys())) this.unpatchCanvas(canvas);

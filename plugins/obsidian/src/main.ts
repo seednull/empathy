@@ -67,7 +67,7 @@ export default class EmpathyPlugin extends Plugin {
         for (const kind of Object.values(EmpathyCanvasNodeKind)) {
             this.addCommand({
                 id: `add-${kind}-node`,
-                name: `Add ${kind.toUpperCase()} node`,
+                name: `Add ${kind.replace("-", " ").toUpperCase()} node`,
                 checkCallback: (checking) => {
                     const view = this.activeCanvasView();
                     if (!view?.canvas || view.canvas.readonly) return false;

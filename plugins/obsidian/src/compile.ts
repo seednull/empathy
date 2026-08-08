@@ -16,6 +16,8 @@ export interface CanvasNodeData {
     empathyEntryCondition?: NarrativeCondition;
     empathyEntryMatchValue?: string;
     empathyChoices?: string[];
+    empathyPortalId?: string;
+    empathyPortalName?: string;
     [key: string]: unknown;
 }
 
@@ -53,6 +55,8 @@ export const EmpathyCanvasNodeKind = {
     LINE: "line",
     CHOICE: "choice",
     SET: "set",
+    PORTAL_RECEIVER: "portal-receiver",
+    PORTAL_TRANSMITTER: "portal-transmitter",
     END: "end",
 } as const;
 
@@ -206,6 +210,23 @@ function outgoingEdges(canvas: Canvas, node: CanvasNode): CanvasEdge[] {
         if (from === node) return true;
         if (!from) return false;
         return (from.id ?? from.getData().id) === id;
+    });
+}
+
+function incomingEdges(canvas: Canvas, node: CanvasNode): CanvasEdge[] {
+    const id = nodeId(node);
+    return Array.from(canvas.edges.values()).filter((edge) => {
+        const to = edge.to?.node;
+        if (to === node) return true;
+        if (!to) return false;
+        return (to.id ?? to.getData().id) === id;
+    });
+}
+
+function portalNodes(canvas: Canvas, portalId: string, kind: EmpathyCanvasNodeKind): CanvasNode[] {
+    return Array.from(canvas.nodes.values()).filter((node) => {
+        const data = node.getData();
+        return getEmpathyCanvasNodeKind(data) === kind && data.empathyPortalId === portalId;
     });
 }
 
@@ -400,6 +421,52 @@ function validateContinuation(
     validateOrderedConditionalEdges(canvas, node, edges, variables, issues, queue);
 }
 
+function validatePortalReceiver(
+    canvas: Canvas,
+    receiver: CanvasNode,
+    issues: CanvasIssue[],
+    queue: CanvasNode[],
+): void {
+    const data = receiver.getData();
+    const portalId = data.empathyPortalId;
+    if (typeof portalId !== "string" || portalId.length === 0) {
+        issueForNode(issues, receiver, "PORTAL RECEIVER requires a portal id");
+    }
+    const outgoing = outgoingEdges(canvas, receiver);
+    if (outgoing.length !== 0) {
+        issueForNode(issues, receiver, `PORTAL RECEIVER must not have outgoing visual edges; found ${outgoing.length}`);
+    }
+    if (typeof portalId !== "string" || portalId.length === 0) return;
+
+    const transmitters = portalNodes(canvas, portalId, EmpathyCanvasNodeKind.PORTAL_TRANSMITTER);
+    if (transmitters.length !== 1) {
+        issueForNode(issues, receiver, `Portal ${portalId} must have exactly one TRANSMITTER; found ${transmitters.length}`);
+        return;
+    }
+
+    const transmitter = transmitters[0];
+    const transmitterData = transmitter.getData();
+    if (typeof transmitterData.empathyPortalName !== "string" || transmitterData.empathyPortalName.trim().length === 0) {
+        issueForNode(issues, transmitter, "PORTAL TRANSMITTER requires a non-empty name");
+    }
+    const incoming = incomingEdges(canvas, transmitter);
+    if (incoming.length !== 0) {
+        issueForNode(issues, transmitter, `PORTAL TRANSMITTER must not have incoming visual edges; found ${incoming.length}`);
+    }
+    const transmitterEdges = outgoingEdges(canvas, transmitter);
+    if (transmitterEdges.length !== 1) {
+        issueForNode(issues, transmitter, `PORTAL TRANSMITTER must have exactly one outgoing edge; found ${transmitterEdges.length}`);
+        return;
+    }
+    const edge = transmitterEdges[0];
+    const edgeData = edge.getData();
+    if (edgeData.empathyCondition !== undefined || edgeData.empathyElse || edgeData.empathyChoiceIndex !== undefined) {
+        issueForEdge(issues, edge, "PORTAL TRANSMITTER continuation must be a normal, unconditional edge");
+    }
+    const target = validTarget(canvas, edge, transmitter, issues);
+    if (target) queue.push(target);
+}
+
 export function validateCanvas(canvas: Canvas, variables: readonly NarrativeVariable[] = []): CanvasIssue[] {
     const issues = validateVariableConfiguration(variables);
     if (!(canvas?.nodes instanceof Map) || !(canvas?.edges instanceof Map)) {
@@ -538,6 +605,10 @@ export function validateCanvas(canvas: Canvas, variables: readonly NarrativeVari
             if (orders.size !== choices.length && edges.length === choices.length) {
                 issueForNode(issues, node, "Every CHOICE option must be linked to exactly one edge");
             }
+        } else if (kind === EmpathyCanvasNodeKind.PORTAL_RECEIVER) {
+            validatePortalReceiver(canvas, node, issues, queue);
+        } else if (kind === EmpathyCanvasNodeKind.PORTAL_TRANSMITTER) {
+            issueForNode(issues, node, "PORTAL TRANSMITTER cannot accept incoming visual edges; connect flow to its RECEIVER");
         } else if (kind === EmpathyCanvasNodeKind.END) {
             const edges = outgoingEdges(canvas, node);
             if (edges.length !== 0) issueForNode(issues, node, `END node must not have outgoing edges; found ${edges.length}`);
@@ -720,12 +791,23 @@ function compileChoice(state: CompileState, node: CanvasNode): void {
     emitJump(state, targets[targets.length - 1]);
 }
 
+function compilePortalReceiver(state: CompileState, node: CanvasNode): void {
+    const transmitter = portalNodes(
+        state.canvas,
+        node.getData().empathyPortalId!,
+        EmpathyCanvasNodeKind.PORTAL_TRANSMITTER,
+    )[0];
+    const edge = outgoingEdges(state.canvas, transmitter)[0];
+    emitJump(state, queueTarget(state, edge, transmitter));
+}
+
 function compileNode(state: CompileState, node: CanvasNode): void {
     switch (getEmpathyCanvasNodeKind(node.getData())) {
         case EmpathyCanvasNodeKind.SAY: compileSay(state, node); return;
         case EmpathyCanvasNodeKind.LINE: compileLine(state, node); return;
         case EmpathyCanvasNodeKind.SET: compileSet(state, node); return;
         case EmpathyCanvasNodeKind.CHOICE: compileChoice(state, node); return;
+        case EmpathyCanvasNodeKind.PORTAL_RECEIVER: compilePortalReceiver(state, node); return;
         case EmpathyCanvasNodeKind.END: state.writer.opcode(EmpathyBytecodeOpcode.END); return;
         default: throw new Error(`Unsupported semantic node ${nodeId(node)}`);
     }

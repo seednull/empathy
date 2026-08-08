@@ -223,7 +223,8 @@ repository root; normal plugin builds do not require Python. Copy `plugins/obsid
 **Settings -> Community plugins**.
 
 With a Canvas open, use the colored Empathy buttons in its bottom card toolbar to add an **ENTRY**,
-**SAY**, **LINE**, **CHOICE**, **SET**, or **END** at the viewport center. The Empathy ribbon icon or
+**SAY**, **LINE**, **CHOICE**, **SET**, **RECEIVER**, **TRANSMITTER**, or **END** at the viewport
+center. Receiver and transmitter have separate buttons and directional icons. The Empathy ribbon icon or
 **Open Empathy panel** command opens the plugin's main right sidebar. It currently contains an action
 that compiles the most recently active Canvas plus the narrative-variable editor, and leaves room for
 more authoring tools. Each variable is edited in one compact name/type/access/delete row. Destructive
@@ -255,10 +256,19 @@ availability predicate and a
 `UINT32` match value; and `CHOICE` owns an ordered, editable list of option texts with move controls.
 CHOICE and SET control sections grow with their rows instead of introducing nested scrollbars; the
 Canvas card is enlarged to the required minimum height while a larger manual size is preserved.
-When a SAY, LINE, or SET has no outgoing edge, its context menu can create and immediately connect a
-SAY, LINE, CHOICE, SET, or END below it, then focus the character, text, or variable field where
-applicable. This small shortcut uses Canvas `importData(..., false)` to upsert only the two involved
-nodes and their new edge.
+When a SAY, LINE, SET, or PORTAL transmitter has no outgoing edge, its context menu can create and
+immediately connect a SAY, LINE, CHOICE, SET, portal RECEIVER, or END below it, then focus the
+character, text, variable, or transmitter selector where applicable. This small shortcut uses Canvas
+`importData(..., false)` to upsert only the involved nodes and their new edge.
+
+A PORTAL is represented by one named transmitter and any number of receivers that reference its
+`empathyPortalId`. A newly created receiver selects the transmitter automatically when exactly one
+exists; otherwise its header presents a transmitter selector. Each receiver accepts any number of
+incoming Canvas edges and has no outgoing visual edge. Flow reaching it resumes at the selected
+transmitter, which cannot have incoming Canvas edges and must have exactly one ordinary,
+unconditional outgoing edge. The hidden relationship is visible through the selected transmitter
+name, but never rendered as a line across the Canvas. Missing or duplicated transmitters and invalid
+endpoint edge directions block compilation.
 
 Conditional transitions are stored directly on ordinary Canvas edges. Both the edge context menu
 and the floating toolbar shown for a selected edge can make an edge conditional, make it `else`,
@@ -284,6 +294,8 @@ metadata stores qualified variable names, never generated table or parameter ind
 | `LINE` | The complete line | One normal edge or an ordered conditional fan-out |
 | `CHOICE` | Empty (or an optional note); option text lives in `empathyChoices` | Exactly one linked edge per option; `empathyChoiceIndex` selects the node-owned text |
 | `SET` | Empty | One or more ordered assignments in `empathyAssignments`; exactly one unconditional edge |
+| `PORTAL` receiver | Empty; its transmitter is selected in the header | Any number of incoming edges; no outgoing visual edge |
+| `PORTAL` transmitter | Empty; its name is edited in the header | No incoming edges; exactly one unconditional outgoing edge |
 | `END` | Empty (or an optional note) | No outgoing edges |
 
 `SAY` and `LINE` may also use an explicitly ordered conditional fan-out with an optional
