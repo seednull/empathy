@@ -3,10 +3,10 @@ import type { EventRef, Menu, Plugin } from "obsidian";
 import {
     AuthoredAtom,
     AuthoredAtomType,
+    generatedAtomKey,
     isAuthoredAtom,
     isValidAtomKey,
-    suggestedAtomKey,
-    uniqueAtomKey,
+    MAXIMUM_ATOM_KEY_LENGTH,
 } from "./atoms";
 
 import {
@@ -276,22 +276,13 @@ export function formatChoiceBadge(data: CanvasEdgeData, choices: readonly Narrat
 
 type CanvasAtomAllocator = (
     type: AuthoredAtomType,
-    text: string,
-    character: string | undefined,
     usedValues: ReadonlySet<number>,
-    usedKeys: ReadonlySet<string>,
 ) => AuthoredAtom;
 
-function usedAtomSets(canvas: Canvas, type: AtomSource["type"], nodeIds?: ReadonlySet<string>): {
-    values: Set<number>;
-    keys: Set<string>;
-} {
+function usedAtomValues(canvas: Canvas, type: AtomSource["type"], nodeIds?: ReadonlySet<string>): Set<number> {
     const sources = collectCanvasAtoms(canvas).filter((source) =>
         source.type === type && (nodeIds === undefined || nodeIds.has(source.nodeId)));
-    return {
-        values: new Set(sources.map(({ value }) => value)),
-        keys: new Set(sources.map(({ key }) => key)),
-    };
+    return new Set(sources.map(({ value }) => value));
 }
 
 export function repairDuplicatedNodeAtoms(
@@ -302,22 +293,16 @@ export function repairDuplicatedNodeAtoms(
 ): boolean {
     const data = node.getData();
     const kind = getEmpathyCanvasNodeKind(data);
-    const lineUsed = usedAtomSets(canvas, AuthoredAtomType.LINE, knownNodeIds);
-    const choiceUsed = usedAtomSets(canvas, AuthoredAtomType.CHOICE, knownNodeIds);
+    const lineUsed = usedAtomValues(canvas, AuthoredAtomType.LINE, knownNodeIds);
+    const choiceUsed = usedAtomValues(canvas, AuthoredAtomType.CHOICE, knownNodeIds);
     let changed = false;
     let nextData = data;
     if (
         (kind === EmpathyCanvasNodeKind.SAY || kind === EmpathyCanvasNodeKind.LINE) &&
         isAuthoredAtom(data.empathyLineAtom) &&
-        (lineUsed.values.has(data.empathyLineAtom.value) || lineUsed.keys.has(data.empathyLineAtom.key))
+        lineUsed.has(data.empathyLineAtom.value)
     ) {
-        const atom = allocate(
-            AuthoredAtomType.LINE,
-            typeof data.text === "string" ? data.text : "",
-            kind === EmpathyCanvasNodeKind.SAY && typeof data.empathyCharacter === "string" ? data.empathyCharacter : undefined,
-            lineUsed.values,
-            lineUsed.keys,
-        );
+        const atom = allocate(AuthoredAtomType.LINE, lineUsed);
         nextData = { ...nextData, empathyLineAtom: atom };
         changed = true;
     }
@@ -325,14 +310,12 @@ export function repairDuplicatedNodeAtoms(
     if (kind === EmpathyCanvasNodeKind.CHOICE && Array.isArray(data.empathyChoices)) {
         const choices = data.empathyChoices.map((option) => {
             if (!isAuthoredAtom(option.atom)) return option;
-            if (!choiceUsed.values.has(option.atom.value) && !choiceUsed.keys.has(option.atom.key)) {
-                choiceUsed.values.add(option.atom.value);
-                choiceUsed.keys.add(option.atom.key);
+            if (!choiceUsed.has(option.atom.value)) {
+                choiceUsed.add(option.atom.value);
                 return option;
             }
-            const atom = allocate(AuthoredAtomType.CHOICE, option.text, undefined, choiceUsed.values, choiceUsed.keys);
-            choiceUsed.values.add(atom.value);
-            choiceUsed.keys.add(atom.key);
+            const atom = allocate(AuthoredAtomType.CHOICE, choiceUsed);
+            choiceUsed.add(atom.value);
             choiceRemap.set(option.atom.value, atom.value);
             changed = true;
             return { ...option, atom };
@@ -389,12 +372,14 @@ export class EmpathyCanvasIntegration {
 
     atomSources(canvas: Canvas): AtomSource[] {
         this.patchCanvas(canvas);
-        return collectCanvasAtoms(canvas).sort((left, right) =>
-            left.type.localeCompare(right.type) || left.value - right.value || left.key.localeCompare(right.key));
+        return collectCanvasAtoms(canvas);
     }
 
     renameAtomKey(canvas: Canvas, source: AtomSource, key: string): string | undefined {
-        if (!isValidAtomKey(key)) return "Use lowercase letters, numbers, underscores, and optional dot-separated segments.";
+        if (this.patchCanvas(canvas).readonly) return "The active Canvas is read-only.";
+        if (!isValidAtomKey(key)) {
+            return `Use at most ${MAXIMUM_ATOM_KEY_LENGTH} lowercase ASCII letters, numbers, and underscores; start with a letter.`;
+        }
         const duplicate = collectCanvasAtoms(canvas).find((candidate) =>
             candidate.type === source.type && candidate.key === key &&
             (candidate.nodeId !== source.nodeId || candidate.value !== source.value));
@@ -403,17 +388,26 @@ export class EmpathyCanvasIntegration {
         return undefined;
     }
 
-    regenerateAtomKey(canvas: Canvas, source: AtomSource): string | undefined {
+    generateAtomKey(canvas: Canvas, source: AtomSource): string | undefined {
+        if (this.patchCanvas(canvas).readonly) return "The active Canvas is read-only.";
         const current = collectCanvasAtoms(canvas).find((candidate) =>
             candidate.type === source.type && candidate.value === source.value && candidate.nodeId === source.nodeId);
         if (!current) return "The atom source is no longer available.";
         const used = new Set(collectCanvasAtoms(canvas)
             .filter((candidate) => candidate.type === source.type &&
                 (candidate.nodeId !== source.nodeId || candidate.value !== source.value))
-            .map(({ key }) => key));
-        const base = suggestedAtomKey(source.type, current.text, current.character);
-        const key = uniqueAtomKey(base, `${source.type}_${source.value}`, used);
+            .flatMap(({ key }) => key === undefined ? [] : [key]));
+        const key = generatedAtomKey(source.type, current.text, source.value, used);
         if (!this.updateAtom(canvas, current, { value: current.value, key })) return "The atom source is no longer available.";
+        return undefined;
+    }
+
+    removeAtomKey(canvas: Canvas, source: AtomSource): string | undefined {
+        if (this.patchCanvas(canvas).readonly) return "The active Canvas is read-only.";
+        const current = collectCanvasAtoms(canvas).find((candidate) =>
+            candidate.type === source.type && candidate.value === source.value && candidate.nodeId === source.nodeId);
+        if (!current) return "The atom source is no longer available.";
+        if (!this.updateAtom(canvas, current, { value: current.value })) return "The atom source is no longer available.";
         return undefined;
     }
 
@@ -597,12 +591,7 @@ export class EmpathyCanvasIntegration {
     ): RuntimeCanvasNode {
         const defaults = semanticDefaults(kind);
         const lineAtom = kind === EmpathyCanvasNodeKind.SAY || kind === EmpathyCanvasNodeKind.LINE
-            ? this.allocateForCanvas(
-                runtime,
-                AuthoredAtomType.LINE,
-                initialText(kind),
-                kind === EmpathyCanvasNodeKind.SAY ? String(defaults.empathyCharacter ?? "") : undefined,
-            )
+            ? this.ui.allocateAtom(AuthoredAtomType.LINE, usedAtomValues(runtime, AuthoredAtomType.LINE))
             : undefined;
         const node = runtime.createTextNode({
             pos,
@@ -624,16 +613,6 @@ export class EmpathyCanvasIntegration {
         node.attach();
         node.render();
         return node;
-    }
-
-    private allocateForCanvas(
-        canvas: Canvas,
-        type: AtomSource["type"],
-        text: string,
-        character?: string,
-    ): AuthoredAtom {
-        const used = usedAtomSets(canvas, type);
-        return this.ui.allocateAtom(type, text, character, used.values, used.keys);
     }
 
     private newPortalId(canvas: RuntimeCanvas): string {
@@ -1533,7 +1512,10 @@ export class EmpathyCanvasIntegration {
     private addChoice(node: RuntimeCanvasNode): void {
         const choices = Array.isArray(node.getData().empathyChoices) ? [...node.getData().empathyChoices!] : [];
         const text = `Choice ${choices.length + 1}`;
-        choices.push({ atom: this.allocateForCanvas(node.canvas, AuthoredAtomType.CHOICE, text), text });
+        choices.push({
+            atom: this.ui.allocateAtom(AuthoredAtomType.CHOICE, usedAtomValues(node.canvas, AuthoredAtomType.CHOICE)),
+            text,
+        });
         this.updateNode(node, { empathyChoices: choices });
     }
 
@@ -1922,11 +1904,9 @@ export class EmpathyCanvasIntegration {
         if (getEmpathyCanvasNodeKind(node.getData()) === kind) return;
         const converted = convertedEmpathyNodeData(node.getData(), kind);
         if (kind === EmpathyCanvasNodeKind.SAY || kind === EmpathyCanvasNodeKind.LINE) {
-            converted.empathyLineAtom = this.allocateForCanvas(
-                node.canvas,
+            converted.empathyLineAtom = this.ui.allocateAtom(
                 AuthoredAtomType.LINE,
-                String(converted.text ?? ""),
-                kind === EmpathyCanvasNodeKind.SAY ? String(converted.empathyCharacter ?? "") : undefined,
+                usedAtomValues(node.canvas, AuthoredAtomType.LINE),
             );
         }
         node.setData(converted);

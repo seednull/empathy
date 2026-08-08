@@ -1,7 +1,5 @@
 import { ItemView, Modal, Notice, setIcon, WorkspaceLeaf } from "obsidian";
 
-import { AuthoredAtomType } from "./atoms";
-
 import {
     AtomSource,
     NarrativeVariable,
@@ -30,7 +28,8 @@ interface EmpathyPanelHost {
     compileActiveCanvas(): Promise<void>;
     getAtomSources(): readonly AtomSource[];
     renameAtomKey(source: AtomSource, key: string): string | undefined;
-    regenerateAtomKey(source: AtomSource): string | undefined;
+    generateAtomKey(source: AtomSource): string | undefined;
+    removeAtomKey(source: AtomSource): string | undefined;
     goToAtomSource(source: AtomSource): boolean;
 }
 
@@ -174,12 +173,13 @@ export class EmpathyPanelView extends ItemView {
         const title = document.createElement("h3");
         title.textContent = "Atoms";
         const intro = document.createElement("p");
-        intro.textContent = "Stable authored identities from the active Canvas.";
+        intro.textContent = "Optional project IDs for authored text in the active Canvas.";
         heading.append(title, intro);
         const search = document.createElement("input");
         search.type = "search";
         search.className = "empathy-atom-search";
-        search.placeholder = "Search key, text, or value…";
+        search.placeholder = "Search ID or text…";
+        search.setAttribute("aria-label", "Search atoms by ID, character, or authored text");
         search.value = this.atomQuery;
         section.append(heading, search);
         const results = document.createElement("div");
@@ -188,9 +188,18 @@ export class EmpathyPanelView extends ItemView {
             this.atomQuery = search.value;
             results.replaceChildren();
             const query = this.atomQuery.trim().toLowerCase();
-            const atoms = this.host.getAtomSources().filter((source) =>
-                !query || source.key.toLowerCase().includes(query) ||
-                source.text.toLowerCase().includes(query) || String(source.value).includes(query));
+            const atoms = [...this.host.getAtomSources()].filter((source) => {
+                const id = source.key ?? `${source.nodeKind}_${source.value}`;
+                return !query || id.includes(query) || source.text.toLowerCase().includes(query) ||
+                    source.character?.toLowerCase().includes(query);
+            }).sort((left, right) => {
+                const leftId = left.key ?? `${left.nodeKind}_${left.value}`;
+                const rightId = right.key ?? `${right.nodeKind}_${right.value}`;
+                if (leftId !== rightId) return leftId < rightId ? -1 : 1;
+                if (left.type !== right.type) return left.type < right.type ? -1 : 1;
+                if (left.value !== right.value) return left.value - right.value;
+                return left.nodeId < right.nodeId ? -1 : left.nodeId > right.nodeId ? 1 : 0;
+            });
             if (atoms.length === 0) {
                 const empty = document.createElement("div");
                 empty.className = "empathy-atoms-empty";
@@ -198,19 +207,7 @@ export class EmpathyPanelView extends ItemView {
                 results.append(empty);
                 return;
             }
-            for (const [type, label] of [
-                [AuthoredAtomType.LINE, "Lines"],
-                [AuthoredAtomType.CHOICE, "Choices"],
-            ] as const) {
-                const values = atoms.filter((source) => source.type === type);
-                if (values.length === 0) continue;
-                const group = document.createElement("section");
-                group.className = "empathy-atom-group";
-                const groupTitle = document.createElement("h4");
-                groupTitle.textContent = label;
-                group.append(groupTitle, ...values.map((source) => this.atomRow(source)));
-                results.append(group);
-            }
+            results.append(...atoms.map((source) => this.atomRow(source)));
         };
         search.addEventListener("input", renderResults);
         renderResults();
@@ -221,65 +218,131 @@ export class EmpathyPanelView extends ItemView {
         const document = this.contentEl.ownerDocument;
         const row = document.createElement("article");
         row.className = "empathy-atom-row";
-        const identity = document.createElement("div");
-        identity.className = "empathy-atom-identity";
-        const value = document.createElement("code");
-        value.textContent = String(source.value);
-        value.title = `${source.type.toUpperCase()} atom value`;
-        const key = document.createElement("input");
-        key.type = "text";
-        key.value = source.key;
-        key.spellcheck = false;
-        key.setAttribute("aria-label", `Key for ${source.type} atom ${source.value}`);
-        identity.append(value, key);
+        const sourceDescription = source.character ? `${source.character}: ${source.text}` : source.text;
+        const rowIdentity = `${source.type}:${source.nodeId}:${source.value}`;
+        const stubId = `${source.nodeKind}_${source.value}`;
+        row.dataset.empathyAtomIdentity = rowIdentity;
+        row.setAttribute("aria-label", `Atom for ${sourceDescription}`);
+        const keyInput = document.createElement("input");
+        keyInput.type = "text";
+        keyInput.className = "empathy-atom-id";
+        keyInput.value = source.key ?? "";
+        keyInput.placeholder = stubId;
+        keyInput.spellcheck = false;
+        const inputLabel = source.key === undefined
+            ? `Atom ID for ${sourceDescription}; default ${stubId}`
+            : `Atom ID for ${sourceDescription}`;
+        keyInput.setAttribute("aria-label", inputLabel);
         const text = document.createElement("div");
         text.className = "empathy-atom-text";
-        text.textContent = `“${source.text}”`;
-        const sourceLabel = document.createElement("div");
-        sourceLabel.className = "empathy-atom-source";
-        sourceLabel.textContent = source.type === AuthoredAtomType.LINE
-            ? `${source.nodeKind.toUpperCase()}${source.character ? ` · ${source.character}` : ""}`
-            : "CHOICE option";
+        text.textContent = source.character ? `${source.character}: “${source.text}”` : `“${source.text}”`;
+        text.title = text.textContent;
         const actions = document.createElement("div");
         actions.className = "empathy-atom-actions";
-        const action = (icon: string, title: string, activate: () => void): HTMLButtonElement => {
+        type AtomControl = "id" | "generate" | "source";
+        type FocusTarget = { atomIdentity: string; control: AtomControl } | { controlIndex: number };
+        const panelControls = (): HTMLElement[] => Array.from(this.contentEl.querySelectorAll<HTMLElement>(
+            "input:not([disabled]), select:not([disabled]), button:not([disabled]), [tabindex]:not([tabindex=\"-1\"])",
+        ));
+        const describeFocusTarget = (target: EventTarget | null): FocusTarget | undefined => {
+            const element = target as HTMLElement | null;
+            if (!element || !this.contentEl.contains(element)) return undefined;
+            const atomRow = element.closest<HTMLElement>(".empathy-atom-row");
+            const atomIdentity = atomRow?.dataset.empathyAtomIdentity;
+            if (atomIdentity) {
+                const control = element.classList.contains("empathy-atom-id")
+                    ? "id"
+                    : element.dataset.empathyAtomAction as AtomControl | undefined;
+                if (control) return { atomIdentity, control };
+            }
+            const controlIndex = panelControls().indexOf(element);
+            return controlIndex < 0 ? undefined : { controlIndex };
+        };
+        const restoreFocus = (target: FocusTarget): void => queueMicrotask(() => {
+            if ("controlIndex" in target) {
+                panelControls()[target.controlIndex]?.focus();
+                return;
+            }
+            const liveRow = Array.from(this.contentEl.querySelectorAll<HTMLElement>(".empathy-atom-row"))
+                .find((candidate) => candidate.dataset.empathyAtomIdentity === target.atomIdentity);
+            const control = target.control === "id"
+                ? liveRow?.querySelector<HTMLInputElement>(".empathy-atom-id")
+                : liveRow?.querySelector<HTMLButtonElement>(`[data-empathy-atom-action="${target.control}"]`);
+            control?.focus();
+        });
+        const setValidationError = (message?: string): void => {
+            row.classList.toggle("is-invalid", Boolean(message));
+            keyInput.toggleAttribute("aria-invalid", Boolean(message));
+            keyInput.title = message ?? "";
+            keyInput.setCustomValidity(message ?? "");
+            keyInput.setAttribute("aria-label", message ? `${inputLabel}. ${message}` : inputLabel);
+        };
+        const currentKey = source.key ?? "";
+        const commitKey = (): string | undefined => {
+            if (keyInput.value === currentKey || (source.key === undefined && keyInput.value === "")) {
+                setValidationError();
+                return undefined;
+            }
+            const message = keyInput.value === ""
+                ? this.host.removeAtomKey(source)
+                : this.host.renameAtomKey(source, keyInput.value);
+            setValidationError(message);
+            if (message) new Notice(message);
+            return message;
+        };
+        const action = (
+            name: Exclude<AtomControl, "id">,
+            icon: string,
+            title: string,
+            activate: () => void,
+        ): HTMLButtonElement => {
             const button = document.createElement("button");
             button.type = "button";
             button.title = title;
-            button.setAttribute("aria-label", title);
+            button.dataset.empathyAtomAction = name;
+            button.setAttribute("aria-label", `${title} for ${sourceDescription}`);
             setIcon(button, icon);
+            button.addEventListener("mousedown", (event) => event.preventDefault());
             button.addEventListener("click", activate);
             return button;
         };
+        let focusAfterCommit: FocusTarget | undefined;
+        keyInput.addEventListener("blur", (event) => {
+            const focus = focusAfterCommit ?? describeFocusTarget(event.relatedTarget);
+            focusAfterCommit = undefined;
+            commitKey();
+            if (focus) restoreFocus(focus);
+        });
+        keyInput.addEventListener("keydown", (event) => {
+            if (event.key === "Enter") {
+                event.preventDefault();
+                if (keyInput.value === currentKey || (source.key === undefined && keyInput.value === "")) {
+                    setValidationError();
+                    return;
+                }
+                focusAfterCommit = { atomIdentity: rowIdentity, control: "id" };
+                keyInput.blur();
+            } else if (event.key === "Escape") {
+                keyInput.value = currentKey;
+                setValidationError();
+                keyInput.blur();
+            }
+        });
         actions.append(
-            action("refresh-cw", "Regenerate key from current text", () => {
-                const error = this.host.regenerateAtomKey(source);
-                if (error) new Notice(error);
+            action("generate", "refresh-cw", source.key === undefined
+                ? "Generate ID from current text"
+                : "Regenerate ID from current text", () => {
+                const message = this.host.generateAtomKey(source);
+                if (message) new Notice(message);
+                else restoreFocus({ atomIdentity: rowIdentity, control: "generate" });
             }),
-            action("copy", "Copy key", () => void this.copyAtomValue(source.key, "Atom key copied")),
-            action("binary", "Copy numeric value", () => void this.copyAtomValue(String(source.value), "Atom value copied")),
-            action("locate-fixed", "Go to source", () => {
+            action("source", "locate-fixed", "Go to source", () => {
+                if (commitKey()) return;
                 if (!this.host.goToAtomSource(source)) new Notice("The atom source is no longer available.");
             }),
         );
-        const error = document.createElement("div");
-        error.className = "empathy-atom-error";
-        key.addEventListener("change", () => {
-            const message = this.host.renameAtomKey(source, key.value.trim());
-            row.classList.toggle("is-invalid", Boolean(message));
-            error.textContent = message ?? "";
-        });
-        row.append(identity, text, sourceLabel, actions, error);
+        row.append(keyInput, text, actions);
         return row;
-    }
-
-    private async copyAtomValue(value: string, notice: string): Promise<void> {
-        try {
-            await navigator.clipboard.writeText(value);
-            new Notice(notice);
-        } catch {
-            new Notice("Clipboard access failed.");
-        }
     }
 
     private variableTable(

@@ -10,9 +10,11 @@ import {
 } from "./canvas";
 import {
     allocateAuthoredAtom,
+    AuthoredAtom,
     AuthoredAtomType,
-    suggestedAtomKey,
-    uniqueAtomKey,
+    generatedAtomKey,
+    isValidAtomKey,
+    MAXIMUM_ATOM_KEY_LENGTH,
 } from "./atoms";
 import {
     Canvas,
@@ -52,9 +54,8 @@ class MockEdge implements CanvasEdge {
 let nextTestLineAtom = 100;
 let nextTestChoiceAtom = 70;
 
-function choice(text: string, condition?: NarrativeCondition, value = nextTestChoiceAtom++): NarrativeChoice {
-    const key = text.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || `choice_${value}`;
-    return { atom: { value, key }, text, ...(condition ? { condition } : {}) };
+function choice(text: string, condition?: NarrativeCondition, value = nextTestChoiceAtom++, key?: string): NarrativeChoice {
+    return { atom: { value, ...(key === undefined ? {} : { key }) }, text, ...(condition ? { condition } : {}) };
 }
 
 function choices(...texts: string[]): NarrativeChoice[] {
@@ -72,7 +73,7 @@ function node(
         ...data,
     };
     if ((kind === EmpathyCanvasNodeKind.SAY || kind === EmpathyCanvasNodeKind.LINE) && !normalized.empathyLineAtom) {
-        normalized.empathyLineAtom = { value: nextTestLineAtom++, key: `line_${nextTestLineAtom - 1}` };
+        normalized.empathyLineAtom = { value: nextTestLineAtom++ };
     }
     return new MockNode(id, normalized);
 }
@@ -311,12 +312,9 @@ function testAllocator() {
     const next = { line: 0, choice: 0 };
     return (
         type: typeof AuthoredAtomType.LINE | typeof AuthoredAtomType.CHOICE,
-        text: string,
-        character: string | undefined,
         usedValues: ReadonlySet<number>,
-        usedKeys: ReadonlySet<string>,
     ) => {
-        const result = allocateAuthoredAtom(type, text, character, next[type], usedValues, usedKeys);
+        const result = allocateAuthoredAtom(type, next[type], usedValues);
         next[type] = result.nextValue;
         return result.atom;
     };
@@ -807,46 +805,112 @@ test("rejects CHOICE edges that reference options outside the node set", () => {
     ), variables), /references missing option atom 2/);
 });
 
-test("allocates new atoms monotonically without changing existing values or keys", () => {
+test("keeps numeric atom identity automatic while human-readable IDs are explicit", () => {
     const usedValues = new Set<number>();
-    const usedKeys = new Set<string>();
-    const first = allocateAuthoredAtom(AuthoredAtomType.LINE, "Same line", undefined, 0, usedValues, usedKeys);
-    const firstSnapshot = { ...first.atom };
+    const first = allocateAuthoredAtom(AuthoredAtomType.LINE, 0, usedValues);
+    assert.deepEqual(first.atom, { value: 0 });
     usedValues.add(first.atom.value);
-    usedKeys.add(first.atom.key);
-    const second = allocateAuthoredAtom(AuthoredAtomType.LINE, "Same line", undefined, first.nextValue, usedValues, usedKeys);
+    const second = allocateAuthoredAtom(AuthoredAtomType.LINE, first.nextValue, usedValues);
     usedValues.add(second.atom.value);
-    usedKeys.add(second.atom.key);
-    const third = allocateAuthoredAtom(AuthoredAtomType.LINE, "Inserted first", undefined, second.nextValue, usedValues, usedKeys);
-    const firstAtom = first.atom;
-    const secondAtom = second.atom;
-    assert.equal(firstAtom.value, 0);
-    assert.equal(secondAtom.value, 1);
-    assert.equal(firstAtom.key, "same_line");
-    assert.equal(secondAtom.key, "same_line_2");
+    const third = allocateAuthoredAtom(AuthoredAtomType.LINE, second.nextValue, usedValues);
+    assert.deepEqual(second.atom, { value: 1 });
     assert.equal(third.atom.value, 2);
-    assert.deepEqual(first.atom, firstSnapshot);
+    assert.throws(() => allocateAuthoredAtom(AuthoredAtomType.LINE, Number.NaN, new Set()), /No LINE atom values remain/);
+    assert.throws(() => allocateAuthoredAtom(AuthoredAtomType.LINE, -1, new Set()), /No LINE atom values remain/);
+
+    const entry = node("entry", EmpathyCanvasNodeKind.ENTRY);
+    const line = node("line", EmpathyCanvasNodeKind.LINE, { text: "Ask about the radio", empathyLineAtom: first.atom });
+    const end = node("end", EmpathyCanvasNodeKind.END);
+    const canvas = graph(
+        [entry, line, end],
+        [new MockEdge("entry-line", entry, line), new MockEdge("line-end", line, end)],
+    );
+    assert.deepEqual(validateCanvas(canvas, variables), []);
+
+    const generated = { value: first.atom.value, key: generatedAtomKey(
+        AuthoredAtomType.LINE,
+        line.getData().text!,
+        first.atom.value,
+        new Set(),
+    ) };
+    line.setData({ ...line.getData(), empathyLineAtom: generated });
+    assert.deepEqual(line.getData().empathyLineAtom, { value: 0, key: "ask_about_the_radio" });
+
+    line.setData({ ...line.getData(), text: "Leave the tower" });
+    assert.deepEqual(line.getData().empathyLineAtom, generated);
+
+    const regenerated = { value: generated.value, key: generatedAtomKey(
+        AuthoredAtomType.LINE,
+        line.getData().text!,
+        generated.value,
+        new Set(),
+    ) };
+    line.setData({ ...line.getData(), empathyLineAtom: regenerated });
+    assert.deepEqual(line.getData().empathyLineAtom, { value: 0, key: "leave_the_tower" });
+
+    line.setData({ ...line.getData(), empathyLineAtom: { value: regenerated.value } });
+    assert.deepEqual(line.getData().empathyLineAtom, { value: 0 });
+    assert.deepEqual(compileCanvas(canvas, variables).lines.map(({ value, key }) => ({ value, key })), [
+        { value: 0, key: undefined },
+    ]);
 });
 
-test("explicit key regeneration changes only the human-readable identity", () => {
-    const original = { value: 1482, key: "mara.the_tower_is_still_transmitting" };
-    const regenerated = {
-        value: original.value,
-        key: uniqueAtomKey(
-            suggestedAtomKey(AuthoredAtomType.LINE, "There's still a signal coming from the tower.", "Mara"),
-            `line_${original.value}`,
-            new Set(["mara.theres_still_a_signal_coming_from_the_tower"]),
-        ),
-    };
-    assert.equal(regenerated.value, original.value);
-    assert.equal(regenerated.key, "mara.theres_still_a_signal_coming_from_the_tower_2");
+test("generates bounded collision-safe ASCII IDs from current authored text", () => {
+    assert.equal(
+        generatedAtomKey(AuthoredAtomType.CHOICE, "Ask about the radio", 73, new Set()),
+        "ask_about_the_radio",
+    );
+    assert.equal(
+        generatedAtomKey(AuthoredAtomType.CHOICE, "Спросить про радио", 73, new Set()),
+        "sprosit_pro_radio",
+    );
+    const long = generatedAtomKey(
+        AuthoredAtomType.LINE,
+        "This deliberately long authored line keeps adding meaningful words beyond the useful identifier boundary",
+        1482,
+        new Set(),
+    );
+    assert.ok(long.length <= MAXIMUM_ATOM_KEY_LENGTH);
+    assert.ok(isValidAtomKey(long));
+    assert.doesNotMatch(long, /_$/);
+    assert.equal(
+        generatedAtomKey(AuthoredAtomType.CHOICE, "Ask about radio", 73, new Set(["ask_about_radio"])),
+        "ask_about_radio_2",
+    );
+    assert.equal(generatedAtomKey(AuthoredAtomType.LINE, "塔はまだ信号を送っている", 1482, new Set()), "line_1482");
+    for (const invalid of ["", "Dialog", "dialog.id", "dialog id", " dialog", "dialog ", "диалог", "_dialog", "dialog-"]) {
+        assert.equal(isValidAtomKey(invalid), false, invalid);
+    }
+});
+
+test("validates, compiles, and generates numeric constants for unassigned atom IDs", () => {
+    const entry = node("entry", EmpathyCanvasNodeKind.ENTRY);
+    const line = node("line", EmpathyCanvasNodeKind.LINE, {
+        text: "The tower is still transmitting.",
+        empathyLineAtom: { value: 1482 },
+    });
+    const end = node("end", EmpathyCanvasNodeKind.END);
+    const canvas = graph(
+        [entry, line, end],
+        [new MockEdge("entry-line", entry, line), new MockEdge("line-end", line, end)],
+    );
+    assert.deepEqual(validateCanvas(canvas, variables), []);
+    const result = compileCanvas(canvas, variables);
+    assert.deepEqual(result.lines.map(({ value, key, text }) => ({ value, key, text })), [{
+        value: 1482,
+        key: undefined,
+        text: "The tower is still transmitting.",
+    }]);
+    const header = generateHeader(result, "radio story");
+    assert.match(header, /#define RADIO_STORY_EMPATHY_LINE_1482 1482u/);
+    assert.match(header, /\{1482u, 0, "The tower is still transmitting\."\}/);
 });
 
 test("repairs duplicated SAY and CHOICE identities and remaps duplicated edges", () => {
     const originalSay = node("original-say", EmpathyCanvasNodeKind.SAY, {
         text: "Hello",
         empathyCharacter: "Mara",
-        empathyLineAtom: { value: 20, key: "mara.hello" },
+        empathyLineAtom: { value: 20, key: "mara_hello" },
     });
     const duplicateSay = new MockNode("duplicate-say", originalSay.getData());
     const originalChoice = node("original-choice", EmpathyCanvasNodeKind.CHOICE, {
@@ -862,8 +926,10 @@ test("repairs duplicated SAY and CHOICE identities and remaps duplicated edges",
     known.add(duplicateSay.id);
     assert.equal(repairDuplicatedNodeAtoms(canvas, duplicateChoice, known, allocate), true);
     assert.notDeepEqual(duplicateSay.getData().empathyLineAtom, originalSay.getData().empathyLineAtom);
+    assert.equal(duplicateSay.getData().empathyLineAtom?.key, undefined);
     const duplicateOptions = duplicateChoice.getData().empathyChoices!;
     assert.deepEqual(duplicateOptions.map(({ atom }) => atom.value), [32, 33]);
+    assert.deepEqual(duplicateOptions.map(({ atom }) => atom.key), [undefined, undefined]);
     assert.equal(duplicatedEdge.getData().empathyChoiceAtom, 32);
 });
 
@@ -945,11 +1011,17 @@ test("ends without yielding when every CHOICE option is hidden", () => {
     });
 });
 
-test("generates stable atom-key constants and an ATOM CHOICE resume contract", () => {
+test("generates keyed and numeric-fallback constants without changing the CHOICE resume contract", () => {
     const fixture = conditionalChoiceGraph();
+    fixture.choiceNode.setData({
+        ...fixture.choiceNode.getData(),
+        empathyChoices: fixture.choiceNode.getData().empathyChoices!.map((option) => option.atom.value === 91
+            ? { ...option, atom: { ...option.atom, key: "choice_radio_ask" } }
+            : option),
+    });
     const line = node("line", EmpathyCanvasNodeKind.LINE, {
         text: "The tower is still transmitting.",
-        empathyLineAtom: { value: 1482, key: "mara.radio_tower_intro" },
+        empathyLineAtom: { value: 1482, key: "dlg_radio_intro_00" },
     });
     const entry = Array.from(fixture.canvas.nodes.values()).find((value) => value.id === "entry")! as MockNode;
     (fixture.canvas.nodes as Map<string, CanvasNode>).set(line.id, line);
@@ -958,23 +1030,80 @@ test("generates stable atom-key constants and an ATOM CHOICE resume contract", (
     fixture.canvas.edges.set("line-choice", new MockEdge("line-choice", line, fixture.choiceNode));
     const result = compileCanvas(fixture.canvas, variables);
     const header = generateHeader(result, "radio story");
-    assert.match(header, /RADIO_STORY_EMPATHY_LINE_MARA_RADIO_TOWER_INTRO 1482u/);
-    assert.match(header, /RADIO_STORY_EMPATHY_CHOICE_RADIO 91u/);
+    assert.match(header, /RADIO_STORY_EMPATHY_LINE_DLG_RADIO_INTRO_00 1482u/);
+    assert.match(header, /RADIO_STORY_EMPATHY_CHOICE_CHOICE_RADIO_ASK 91u/);
+    assert.match(header, /RADIO_STORY_EMPATHY_CHOICE_73 73u/);
+    assert.match(header, /\{73u, 0, "Always"\}/);
+    assert.match(header, /\{91u, "choice_radio_ask", "Radio"\}/);
     assert.match(header, /\{EMPATHY_VALUE_BASE_TYPE_ATOM, RADIO_STORY_EMPATHY_ATOM_TYPE_CHOICE\}/);
-    line.setData({ ...line.getData(), empathyLineAtom: { value: 1482, key: "mara.renamed_intro" } });
+    line.setData({ ...line.getData(), empathyLineAtom: { value: 1482, key: "for" } });
+    const keyword = generateHeader(compileCanvas(fixture.canvas, variables), "radio story");
+    assert.match(keyword, /RADIO_STORY_EMPATHY_LINE_FOR 1482u/);
+    assert.doesNotMatch(keyword, /LINE__FOR/);
+    line.setData({ ...line.getData(), empathyLineAtom: { value: 1482, key: "dlg_radio_intro_01" } });
     const renamed = generateHeader(compileCanvas(fixture.canvas, variables), "radio story");
-    assert.match(renamed, /RADIO_STORY_EMPATHY_LINE_MARA_RENAMED_INTRO 1482u/);
-    assert.doesNotMatch(renamed, /MARA_RADIO_TOWER_INTRO/);
+    assert.match(renamed, /RADIO_STORY_EMPATHY_LINE_DLG_RADIO_INTRO_01 1482u/);
+    assert.doesNotMatch(renamed, /DLG_RADIO_INTRO_00/);
+    line.setData({ ...line.getData(), empathyLineAtom: { value: 1482 } });
+    const removed = generateHeader(compileCanvas(fixture.canvas, variables), "radio story");
+    assert.match(removed, /RADIO_STORY_EMPATHY_LINE_1482 1482u/);
+    assert.match(removed, /\{1482u, 0, "The tower is still transmitting\."\}/);
     assert.equal(entry.id, "entry");
+});
+
+test("validates optional IDs only when present and scopes uniqueness to atom type", () => {
+    const entry = node("entry", EmpathyCanvasNodeKind.ENTRY);
+    const line = node("line", EmpathyCanvasNodeKind.LINE, {
+        text: "Introduction",
+        empathyLineAtom: { value: 8, key: "intro" },
+    });
+    const choiceNode = node("choice", EmpathyCanvasNodeKind.CHOICE, {
+        empathyChoices: [choice("Leave", undefined, 73, "intro")],
+    });
+    const end = node("end", EmpathyCanvasNodeKind.END);
+    const canvas = graph(
+        [entry, line, choiceNode, end],
+        [
+            new MockEdge("entry-line", entry, line),
+            new MockEdge("line-choice", line, choiceNode),
+            new MockEdge("choice-end", choiceNode, end, { empathyChoiceAtom: 73 }),
+        ],
+    );
+    assert.deepEqual(validateCanvas(canvas, variables), []);
+
+    line.setData({ ...line.getData(), empathyLineAtom: { value: 8, key: "invalid.id" } });
+    assert.ok(validateCanvas(canvas, variables).some(({ message }) => message.includes("invalid LINE atom key")));
+});
+
+test("keeps numeric atom metadata mandatory and within the UINT32 domain", () => {
+    const entry = node("entry", EmpathyCanvasNodeKind.ENTRY);
+    const line = node("line", EmpathyCanvasNodeKind.LINE, { text: "Line", empathyLineAtom: { value: 9 } });
+    const end = node("end", EmpathyCanvasNodeKind.END);
+    const canvas = graph(
+        [entry, line, end],
+        [new MockEdge("entry-line", entry, line), new MockEdge("line-end", line, end)],
+    );
+    const issuesFor = (atom: AuthoredAtom | undefined): string[] => {
+        line.setData({ ...line.getData(), empathyLineAtom: atom });
+        return validateCanvas(canvas, variables).map(({ message }) => message);
+    };
+    assert.ok(issuesFor(undefined).some((message) => message.includes("missing stable LINE atom metadata")));
+    assert.ok(issuesFor({ key: "line" } as AuthoredAtom).some((message) => message.includes("invalid LINE atom value")));
+    for (const value of [-1, 1.5, 0x100000000]) {
+        assert.ok(issuesFor({ value }).some((message) => message.includes("invalid LINE atom value")), String(value));
+    }
+    assert.ok(issuesFor({ value: 9, automatic: true } as unknown as AuthoredAtom)
+        .some((message) => message.includes("unsupported LINE atom metadata: automatic")));
 });
 
 test("validates duplicate atom identities and conditional CHOICE variable access", () => {
     const entry = node("entry", EmpathyCanvasNodeKind.ENTRY);
     const first = node("first", EmpathyCanvasNodeKind.LINE, { text: "One", empathyLineAtom: { value: 7, key: "same" } });
-    const second = node("second", EmpathyCanvasNodeKind.LINE, { text: "Two", empathyLineAtom: { value: 7, key: "same" } });
+    const second = node("second", EmpathyCanvasNodeKind.LINE, { text: "Two", empathyLineAtom: { value: 8, key: "same" } });
+    const third = node("third", EmpathyCanvasNodeKind.LINE, { text: "Three", empathyLineAtom: { value: 7, key: "other" } });
     const end = node("end", EmpathyCanvasNodeKind.END);
     const duplicateIssues = validateCanvas(graph(
-        [entry, first, second, end],
+        [entry, first, second, third, end],
         [new MockEdge("entry-first", entry, first), new MockEdge("first-end", first, end)],
     ), variables);
     assert.ok(duplicateIssues.some(({ message }) => message.includes("LINE atom value 7 is duplicated")));

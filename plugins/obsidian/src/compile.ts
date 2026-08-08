@@ -391,9 +391,9 @@ function validateAuthoredAtoms(canvas: Canvas, issues: CanvasIssue[]): void {
                 issueForNode(issues, node, `${type.toUpperCase()} atom value ${candidate.value} is duplicated`);
             } else values.get(type)!.set(candidate.value, node);
         }
-        if (!isValidAtomKey(candidate.key)) {
+        if (candidate.key !== undefined && !isValidAtomKey(candidate.key)) {
             issueForNode(issues, node, `${label} has an empty or invalid ${type.toUpperCase()} atom key`);
-        } else {
+        } else if (candidate.key !== undefined) {
             const owner = keys.get(type)!.get(candidate.key);
             if (owner && owner !== node) {
                 issueForNode(issues, node, `${type.toUpperCase()} atom key ${candidate.key} is duplicated`);
@@ -1101,7 +1101,7 @@ function authoredAtomTable(typeName: string, symbol: string, values: readonly Co
         `static const ${typeName} ${symbol}[] =`,
         "{",
         ...(values.length > 0
-            ? values.map((atom) => `    {${atom.value}u, ${cString(atom.key)}, ${cString(atom.text)}},`)
+            ? values.map((atom) => `    {${atom.value}u, ${atom.key === undefined ? "0" : cString(atom.key)}, ${cString(atom.text)}},`)
             : ["    {0u, 0, 0},"]),
         "};",
     ];
@@ -1124,10 +1124,9 @@ function authoredAtomConstants(
     kind: "LINE" | "CHOICE",
     values: readonly CompiledAuthoredAtom[],
 ): Map<number, string> {
-    const used = new Set<string>();
     return new Map(values.map((atom) => [
         atom.value,
-        uniqueName(`${macro}_${kind}_${cIdentifier(atom.key, `${kind}_${atom.value}`).toUpperCase()}`, used),
+        `${macro}_${kind}_${atom.key === undefined ? String(atom.value) : atom.key.toUpperCase()}`,
     ]));
 }
 

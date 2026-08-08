@@ -88,9 +88,13 @@ export default class EmpathyPlugin extends Plugin {
                 "No active Canvas is available.",
                 (canvas) => this.canvasIntegration.renameAtomKey(canvas, source, key),
             ),
-            regenerateAtomKey: (source) => withActiveCanvas(
+            generateAtomKey: (source) => withActiveCanvas(
                 "No active Canvas is available.",
-                (canvas) => this.canvasIntegration.regenerateAtomKey(canvas, source),
+                (canvas) => this.canvasIntegration.generateAtomKey(canvas, source),
+            ),
+            removeAtomKey: (source) => withActiveCanvas(
+                "No active Canvas is available.",
+                (canvas) => this.canvasIntegration.removeAtomKey(canvas, source),
             ),
             goToAtomSource: (source) => withActiveCanvas(false, (canvas, view) => {
                 void this.app.workspace.revealLeaf(view.leaf);
@@ -105,8 +109,7 @@ export default class EmpathyPlugin extends Plugin {
             },
             getVariables: () => this.variables,
             openPanel: (selectCreated) => void this.openPanel(selectCreated),
-            allocateAtom: (type, text, character, usedValues, usedKeys) =>
-                this.allocateAtom(type, text, character, usedValues, usedKeys),
+            allocateAtom: (type, usedValues) => this.allocateAtom(type, usedValues),
             atomsChanged: () => this.refreshPanels(),
         });
         this.canvasIntegration.register();
@@ -200,18 +203,12 @@ export default class EmpathyPlugin extends Plugin {
 
     private allocateAtom(
         type: AuthoredAtomType,
-        text: string,
-        character: string | undefined,
         usedValues: ReadonlySet<number>,
-        usedKeys: ReadonlySet<string>,
     ): AuthoredAtom {
         const allocation = allocateAuthoredAtom(
             type,
-            text,
-            character,
             this.nextAtomValue[type],
             usedValues,
-            usedKeys,
         );
         this.nextAtomValue = { ...this.nextAtomValue, [type]: allocation.nextValue };
         void this.persistData();
