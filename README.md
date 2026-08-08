@@ -251,11 +251,15 @@ validation reports them instead of silently replacing them.
 Precise node placement remains available from the Canvas background menu. The same node actions are
 available in the command palette, and an existing text card can be converted from its context menu.
 Every typed card has a persistent visual header. `SAY` has a separate character input; `SET` has a
-list of ordered typed variable/operation/literal assignments; `ENTRY` can have one typed
-availability predicate and a
+list of ordered typed variable/operation/literal assignments; `ENTRY` edits its name in the header
+and can have one typed availability predicate and a
 `UINT32` match value; and `CHOICE` owns an ordered, editable list of option texts with move controls.
-CHOICE and SET control sections grow with their rows instead of introducing nested scrollbars; the
-Canvas card is enlarged to the required minimum height while a larger manual size is preserved.
+Headers show only the node type and its meaningful controls, without descriptive subtitles.
+ENTRY, CHOICE, SET, portal endpoints, and END hide the unused native text body while remaining
+ordinary Canvas text nodes, so native selection, resizing, connections, undo, and redo continue to
+work. Their cards grow to fit header controls instead of introducing nested scrollbars, while a
+larger manual size is preserved. Canvas resizing is clamped to each structural node's minimum
+control width and current content height, including multi-node resize gestures.
 When a SAY, LINE, SET, or PORTAL transmitter has no outgoing edge, its context menu can create and
 immediately connect a SAY, LINE, CHOICE, SET, portal RECEIVER, or END below it, then focus the
 character, text, variable, or transmitter selector where applicable. This small shortcut uses Canvas
@@ -289,14 +293,14 @@ metadata stores qualified variable names, never generated table or parameter ind
 
 | Node | Card text | Edges |
 | --- | --- | --- |
-| `ENTRY` | Entry name | Exactly one unconditional outgoing edge; optional `empathyEntryCondition` and match value |
+| `ENTRY` | Native body hidden; entry name is edited in the header | Exactly one unconditional outgoing edge; optional `empathyEntryCondition` and match value |
 | `SAY` | Dialogue only; character is edited in the header | One normal edge or an ordered conditional fan-out |
 | `LINE` | The complete line | One normal edge or an ordered conditional fan-out |
-| `CHOICE` | Empty (or an optional note); option text lives in `empathyChoices` | Exactly one linked edge per option; `empathyChoiceIndex` selects the node-owned text |
-| `SET` | Empty | One or more ordered assignments in `empathyAssignments`; exactly one unconditional edge |
-| `PORTAL` receiver | Empty; its transmitter is selected in the header | Any number of incoming edges; no outgoing visual edge |
-| `PORTAL` transmitter | Empty; its name is edited in the header | No incoming edges; exactly one unconditional outgoing edge |
-| `END` | Empty (or an optional note) | No outgoing edges |
+| `CHOICE` | Native body hidden; option text lives in `empathyChoices` | Exactly one linked edge per option; `empathyChoiceIndex` selects the node-owned text |
+| `SET` | Native body hidden | One or more ordered assignments in `empathyAssignments`; exactly one unconditional edge |
+| `PORTAL` receiver | Native body hidden; its transmitter is selected in the header | Any number of incoming edges; no outgoing visual edge |
+| `PORTAL` transmitter | Native body hidden; its name is edited in the header | No incoming edges; exactly one unconditional outgoing edge |
+| `END` | Native body hidden | No outgoing edges |
 
 `SAY` and `LINE` may also use an explicitly ordered conditional fan-out with an optional
 implicit-last `else` instead of a single continuation. Each `SET` assignment supports `=` for

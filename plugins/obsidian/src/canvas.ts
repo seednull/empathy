@@ -20,6 +20,7 @@ import {
 
 interface CanvasPoint { x: number; y: number }
 interface CanvasSize { width: number; height: number }
+interface CanvasRect extends CanvasPoint, CanvasSize {}
 
 interface CanvasUi {
     setIcon(parent: HTMLElement, icon: string): void;
@@ -38,6 +39,7 @@ interface RuntimeCanvasNode extends CanvasNode {
     attach(): void;
     render(): void;
     startEditing(): void;
+    moveAndResize(rect: CanvasRect): void;
 }
 
 interface RuntimeCanvasEdge extends CanvasEdge {
@@ -115,24 +117,28 @@ const nodeIcons: Record<EmpathyCanvasNodeKind, string> = {
     "portal-receiver": "log-in", "portal-transmitter": "log-out", end: "square",
 };
 const nodeSizes: Record<EmpathyCanvasNodeKind, CanvasSize> = {
-    entry: { width: 390, height: 180 },
+    entry: { width: 390, height: 80 },
     say: { width: 360, height: 200 },
     line: { width: 360, height: 160 },
-    choice: { width: 360, height: 180 },
-    set: { width: 430, height: 220 },
-    "portal-receiver": { width: 300, height: 100 },
-    "portal-transmitter": { width: 300, height: 100 },
-    end: { width: 220, height: 100 },
+    choice: { width: 360, height: 80 },
+    set: { width: 430, height: 112 },
+    "portal-receiver": { width: 300, height: 48 },
+    "portal-transmitter": { width: 300, height: 48 },
+    end: { width: 220, height: 48 },
 };
 const nodeSymbols: Record<EmpathyCanvasNodeKind, string> = {
     entry: "↦", say: "“", line: "¶", choice: "◇", set: "=",
     "portal-receiver": "↓", "portal-transmitter": "↑", end: "■",
 };
-const nodeHints: Partial<Record<EmpathyCanvasNodeKind, string>> = {
-    entry: "START", line: "NARRATION", choice: "ORDERED OPTIONS", set: "STATE CHANGE",
-    "portal-receiver": "PORTAL IN", "portal-transmitter": "PORTAL OUT", end: "STOP",
-};
 const nodeKinds = Object.values(EmpathyCanvasNodeKind);
+const headerOnlyNodeKinds = new Set<EmpathyCanvasNodeKind>([
+    EmpathyCanvasNodeKind.ENTRY,
+    EmpathyCanvasNodeKind.CHOICE,
+    EmpathyCanvasNodeKind.SET,
+    EmpathyCanvasNodeKind.PORTAL_RECEIVER,
+    EmpathyCanvasNodeKind.PORTAL_TRANSMITTER,
+    EmpathyCanvasNodeKind.END,
+]);
 const creationNodeKinds: readonly EmpathyCanvasNodeKind[] = [
     EmpathyCanvasNodeKind.ENTRY,
     EmpathyCanvasNodeKind.SAY,
@@ -413,7 +419,8 @@ export class EmpathyCanvasIntegration {
         runtime.markDirty(node);
         runtime.requestSave();
         if (kind === EmpathyCanvasNodeKind.SAY) this.focusCharacterField(node);
-        else if (kind === EmpathyCanvasNodeKind.LINE || kind === EmpathyCanvasNodeKind.ENTRY) node.startEditing();
+        else if (kind === EmpathyCanvasNodeKind.LINE) node.startEditing();
+        else if (kind === EmpathyCanvasNodeKind.ENTRY) this.focusEntryName(node);
         else if (kind === EmpathyCanvasNodeKind.SET) this.focusVariablePicker(node);
         else if (kind === EmpathyCanvasNodeKind.PORTAL_RECEIVER) this.focusPortalReceiver(node);
         else if (kind === EmpathyCanvasNodeKind.PORTAL_TRANSMITTER) this.focusPortalName(node);
@@ -820,6 +827,8 @@ export class EmpathyCanvasIntegration {
         const originalSetData = node.setData;
         const originalRender = node.render;
         const originalSetIsEditing = node.setIsEditing;
+        const originalStartEditing = node.startEditing;
+        const originalMoveAndResize = node.moveAndResize;
         const nodePatch: NodePatch = { restore: [] };
         patch.nodes.set(node, nodePatch);
         const wrappedSetData: RuntimeCanvasNode["setData"] = (data) => {
@@ -831,13 +840,35 @@ export class EmpathyCanvasIntegration {
             if (!this.disposed) this.decorateNode(patch, node);
         };
         const wrappedSetIsEditing: RuntimeCanvasNode["setIsEditing"] = (editing, ...args) => {
+            const kind = getEmpathyCanvasNodeKind(node.getData());
+            if (editing && kind && headerOnlyNodeKinds.has(kind)) {
+                this.focusHeaderControl(node, kind);
+                return;
+            }
             originalSetIsEditing.call(node, editing, ...args);
             if (!this.disposed) this.decorateNode(patch, node);
+        };
+        const wrappedStartEditing: RuntimeCanvasNode["startEditing"] = () => {
+            const kind = getEmpathyCanvasNodeKind(node.getData());
+            if (kind && headerOnlyNodeKinds.has(kind)) {
+                this.focusHeaderControl(node, kind);
+                return;
+            }
+            originalStartEditing.call(node);
+        };
+        const wrappedMoveAndResize: RuntimeCanvasNode["moveAndResize"] = (rect) => {
+            const kind = getEmpathyCanvasNodeKind(node.getData());
+            originalMoveAndResize.call(
+                node,
+                kind && headerOnlyNodeKinds.has(kind) ? this.clampHeaderOnlyRect(patch, node, kind, rect) : rect,
+            );
         };
         nodePatch.restore.push(
             patchProperty(node, "setData", wrappedSetData),
             patchProperty(node, "render", wrappedRender),
             patchProperty(node, "setIsEditing", wrappedSetIsEditing),
+            patchProperty(node, "startEditing", wrappedStartEditing),
+            patchProperty(node, "moveAndResize", wrappedMoveAndResize),
         );
         this.decorateNode(patch, node);
     }
@@ -873,6 +904,7 @@ export class EmpathyCanvasIntegration {
         if (!kind) { this.clearDecoration(patch, node); return; }
         for (const known of nodeKinds) node.nodeEl.classList.remove(`empathy-canvas-node-${known}`);
         node.nodeEl.classList.add("empathy-canvas-node", `empathy-canvas-node-${kind}`);
+        node.nodeEl.classList.toggle("empathy-canvas-node-header-only", headerOnlyNodeKinds.has(kind));
         node.nodeEl.dataset.empathyMode = node.isEditing || node.nodeEl.classList.contains("is-editing") ? "edit" : "preview";
         this.ensureHeader(patch, node, kind, data);
     }
@@ -893,14 +925,14 @@ export class EmpathyCanvasIntegration {
             const label = node.nodeEl.ownerDocument.createElement("span");
             label.className = "empathy-canvas-node-type";
             label.textContent = nodeLabels[kind];
-            const hint = node.nodeEl.ownerDocument.createElement("span");
-            hint.className = "empathy-canvas-node-hint";
-            hint.textContent = nodeHints[kind] ?? "";
-            title.append(symbol, label, hint);
+            title.append(symbol, label);
             header.append(title);
             if (kind === EmpathyCanvasNodeKind.SAY) this.addCharacterControl(patch, node, header);
             else if (kind === EmpathyCanvasNodeKind.SET) this.addSetControls(node, header, data);
-            else if (kind === EmpathyCanvasNodeKind.ENTRY) this.addEntryControls(node, header, data);
+            else if (kind === EmpathyCanvasNodeKind.ENTRY) {
+                this.addEntryNameControl(patch, node, header);
+                this.addEntryControls(node, header, data);
+            }
             else if (kind === EmpathyCanvasNodeKind.CHOICE) this.addChoiceControls(patch, node, header, data);
             else if (kind === EmpathyCanvasNodeKind.PORTAL_RECEIVER) this.addPortalReceiverControl(patch, node, header);
             else if (kind === EmpathyCanvasNodeKind.PORTAL_TRANSMITTER) this.addPortalTransmitterControl(patch, node, header);
@@ -913,6 +945,12 @@ export class EmpathyCanvasIntegration {
             const character = typeof data.empathyCharacter === "string" ? data.empathyCharacter : "";
             if (input && node.nodeEl.ownerDocument.activeElement !== input) input.value = character;
             if (input) input.disabled = Boolean(node.canvas.readonly || node.isEditing || node.nodeEl.classList.contains("is-editing"));
+        }
+        if (kind === EmpathyCanvasNodeKind.ENTRY) {
+            const input = nodePatch.headerEl.querySelector<HTMLInputElement>(".empathy-canvas-entry-input");
+            const name = typeof data.text === "string" ? data.text : "";
+            if (input && node.nodeEl.ownerDocument.activeElement !== input) input.value = name;
+            if (input) input.disabled = node.canvas.readonly;
         }
         if (kind === EmpathyCanvasNodeKind.PORTAL_TRANSMITTER) {
             const input = nodePatch.headerEl.querySelector<HTMLInputElement>(".empathy-canvas-portal-input");
@@ -933,40 +971,37 @@ export class EmpathyCanvasIntegration {
         for (const control of Array.from(controls)) {
             control.disabled = node.canvas.readonly;
         }
-        this.fitExpandableNode(patch, node, kind, nodePatch.headerEl);
+        this.fitHeaderOnlyNode(patch, node, kind);
     }
 
-    private fitExpandableNode(
+    private fitHeaderOnlyNode(
         patch: CanvasPatch,
         node: RuntimeCanvasNode,
         kind: EmpathyCanvasNodeKind,
-        header: HTMLElement,
     ): void {
         const nodePatch = patch.nodes.get(node);
         if (!nodePatch) return;
-        if (kind !== EmpathyCanvasNodeKind.CHOICE && kind !== EmpathyCanvasNodeKind.SET) {
-            node.nodeEl.style.removeProperty("--empathy-node-header-height");
+        if (!headerOnlyNodeKinds.has(kind)) {
             nodePatch.autoHeight = undefined;
             return;
         }
 
-        const headerHeight = Math.ceil(header.scrollHeight);
-        if (headerHeight <= 0) return;
-        node.nodeEl.style.setProperty("--empathy-node-header-height", `${headerHeight}px`);
+        const minimum = this.headerOnlyMinimumSize(patch, node, kind);
         if (node.canvas.readonly) return;
 
         const data = node.getData();
+        const currentWidth = typeof data.width === "number" ? data.width : nodeSizes[kind].width;
         const currentHeight = typeof data.height === "number" ? data.height : nodeSizes[kind].height;
-        const requiredHeight = Math.max(nodeSizes[kind].height, headerHeight + 12);
+        const nextWidth = Math.max(currentWidth, minimum.width);
         let nextHeight = currentHeight;
-        if (currentHeight < requiredHeight) nextHeight = requiredHeight;
-        else if (nodePatch.autoHeight === currentHeight && currentHeight > requiredHeight) nextHeight = requiredHeight;
-        else if (currentHeight === requiredHeight) nodePatch.autoHeight = currentHeight;
+        if (currentHeight < minimum.height) nextHeight = minimum.height;
+        else if (nodePatch.autoHeight === currentHeight && currentHeight > minimum.height) nextHeight = minimum.height;
+        else if (currentHeight === minimum.height) nodePatch.autoHeight = currentHeight;
         else if (nodePatch.autoHeight !== currentHeight) nodePatch.autoHeight = undefined;
-        if (nextHeight === currentHeight) return;
+        if (nextWidth === currentWidth && nextHeight === currentHeight) return;
 
         nodePatch.autoHeight = nextHeight;
-        node.setData({ ...data, height: nextHeight });
+        node.setData({ ...data, width: nextWidth, height: nextHeight });
         node.canvas.markDirty(node);
         if (patch.resizeSaveTimer === undefined) {
             patch.resizeSaveTimer = setTimeout(() => {
@@ -978,6 +1013,61 @@ export class EmpathyCanvasIntegration {
         }
     }
 
+    private headerOnlyMinimumSize(
+        patch: CanvasPatch,
+        node: RuntimeCanvasNode,
+        kind: EmpathyCanvasNodeKind,
+    ): CanvasSize {
+        const header = patch.nodes.get(node)?.headerEl;
+        if (!header) return nodeSizes[kind];
+        const style = header.ownerDocument.defaultView?.getComputedStyle(header);
+        const pixels = (value: string | undefined): number => Number.parseFloat(value ?? "") || 0;
+        const children = Array.from(header.children) as HTMLElement[];
+        const contentHeight = children.reduce(
+            (height, child) => height + Math.max(child.scrollHeight, child.offsetHeight),
+            0,
+        );
+        const height = Math.ceil(
+            contentHeight +
+            Math.max(0, children.length - 1) * pixels(style?.rowGap) +
+            pixels(style?.paddingTop) +
+            pixels(style?.paddingBottom),
+        );
+        return { width: nodeSizes[kind].width, height: Math.max(nodeSizes[kind].height, height) };
+    }
+
+    private clampHeaderOnlyRect(
+        patch: CanvasPatch,
+        node: RuntimeCanvasNode,
+        kind: EmpathyCanvasNodeKind,
+        rect: CanvasRect,
+    ): CanvasRect {
+        const minimum = this.headerOnlyMinimumSize(patch, node, kind);
+        if (rect.width >= minimum.width && rect.height >= minimum.height) return rect;
+
+        const current = node.getData();
+        const currentRect: CanvasRect = {
+            x: typeof current.x === "number" ? current.x : rect.x,
+            y: typeof current.y === "number" ? current.y : rect.y,
+            width: typeof current.width === "number" ? current.width : rect.width,
+            height: typeof current.height === "number" ? current.height : rect.height,
+        };
+        const width = Math.max(rect.width, minimum.width);
+        const height = Math.max(rect.height, minimum.height);
+        const leftMoved = Math.abs(rect.x - currentRect.x) > Math.abs(
+            rect.x + rect.width - currentRect.x - currentRect.width,
+        );
+        const topMoved = Math.abs(rect.y - currentRect.y) > Math.abs(
+            rect.y + rect.height - currentRect.y - currentRect.height,
+        );
+        return {
+            x: rect.width < minimum.width && leftMoved ? currentRect.x + currentRect.width - width : rect.x,
+            y: rect.height < minimum.height && topMoved ? currentRect.y + currentRect.height - height : rect.y,
+            width,
+            height,
+        };
+    }
+
     private addCharacterControl(patch: CanvasPatch, node: RuntimeCanvasNode, header: HTMLElement): void {
         const input = header.ownerDocument.createElement("input");
         input.className = "empathy-canvas-character-input";
@@ -987,6 +1077,20 @@ export class EmpathyCanvasIntegration {
         input.addEventListener("input", () => this.updateCharacter(patch, node, input.value));
         input.addEventListener("change", () => this.flushCharacterSave(patch, node));
         input.addEventListener("blur", () => this.flushCharacterSave(patch, node));
+        stopCanvasEvents(input);
+        header.querySelector(".empathy-canvas-node-title")!.append(input);
+    }
+
+    private addEntryNameControl(patch: CanvasPatch, node: RuntimeCanvasNode, header: HTMLElement): void {
+        const input = header.ownerDocument.createElement("input");
+        input.className = "empathy-canvas-entry-input";
+        input.type = "text";
+        input.placeholder = "Entry name";
+        input.value = typeof node.getData().text === "string" ? node.getData().text! : "";
+        input.addEventListener("input", () => this.updateEntryName(patch, node, input.value));
+        input.addEventListener("change", () => {
+            if (!node.canvas.readonly) node.canvas.requestSave();
+        });
         stopCanvasEvents(input);
         header.querySelector(".empathy-canvas-node-title")!.append(input);
     }
@@ -1635,6 +1739,14 @@ export class EmpathyCanvasIntegration {
         }
     }
 
+    private updateEntryName(patch: CanvasPatch, node: RuntimeCanvasNode, name: string): void {
+        if (node.canvas.readonly) return;
+        const data = node.getData();
+        if (getEmpathyCanvasNodeKind(data) !== EmpathyCanvasNodeKind.ENTRY) return;
+        node.setData({ ...data, text: name });
+        patch.canvas.markDirty(node);
+    }
+
     private updatePortalReceiver(patch: CanvasPatch, node: RuntimeCanvasNode, portalId: string): void {
         if (node.canvas.readonly) return;
         const data = node.getData();
@@ -1685,12 +1797,11 @@ export class EmpathyCanvasIntegration {
     }
 
     private clearDecoration(patch: CanvasPatch, node: RuntimeCanvasNode): void {
-        node.nodeEl.classList.remove("empathy-canvas-node", "empathy-canvas-invalid");
+        node.nodeEl.classList.remove("empathy-canvas-node", "empathy-canvas-node-header-only", "empathy-canvas-invalid");
         for (const kind of nodeKinds) node.nodeEl.classList.remove(`empathy-canvas-node-${kind}`);
         delete node.nodeEl.dataset.empathyMode;
         const nodePatch = patch.nodes.get(node);
         nodePatch?.headerEl?.remove();
-        node.nodeEl.style.removeProperty("--empathy-node-header-height");
         if (nodePatch) { nodePatch.headerEl = undefined; nodePatch.signature = undefined; nodePatch.autoHeight = undefined; }
     }
 
@@ -1733,9 +1844,18 @@ export class EmpathyCanvasIntegration {
         catch (error) { this.ui.showNotice(`Empathy node creation failed: ${error instanceof Error ? error.message : String(error)}`); }
     }
     private focusCharacterField(node: RuntimeCanvasNode): void { node.nodeEl.querySelector<HTMLInputElement>(".empathy-canvas-character-input")?.focus(); }
+    private focusEntryName(node: RuntimeCanvasNode): void { node.nodeEl.querySelector<HTMLInputElement>(".empathy-canvas-entry-input")?.focus(); }
     private focusVariablePicker(node: RuntimeCanvasNode): void { node.nodeEl.querySelector<HTMLInputElement>(".empathy-variable-picker input")?.focus(); }
     private focusPortalReceiver(node: RuntimeCanvasNode): void { node.nodeEl.querySelector<HTMLSelectElement>(".empathy-canvas-portal-select")?.focus(); }
     private focusPortalName(node: RuntimeCanvasNode): void { node.nodeEl.querySelector<HTMLInputElement>(".empathy-canvas-portal-input")?.focus(); }
+    private focusHeaderControl(node: RuntimeCanvasNode, kind: EmpathyCanvasNodeKind): void {
+        if (kind === EmpathyCanvasNodeKind.ENTRY) this.focusEntryName(node);
+        else if (kind === EmpathyCanvasNodeKind.CHOICE) {
+            node.nodeEl.querySelector<HTMLElement>(".empathy-choice-row input, .empathy-choice-add")?.focus();
+        } else if (kind === EmpathyCanvasNodeKind.SET) this.focusVariablePicker(node);
+        else if (kind === EmpathyCanvasNodeKind.PORTAL_RECEIVER) this.focusPortalReceiver(node);
+        else if (kind === EmpathyCanvasNodeKind.PORTAL_TRANSMITTER) this.focusPortalName(node);
+    }
     private unload(): void {
         this.disposed = true;
         for (const canvas of Array.from(this.patches.keys())) this.unpatchCanvas(canvas);

@@ -193,17 +193,8 @@
     letter-spacing: 0.08em;
 }
 
-.empathy-canvas-node-hint {
-    min-width: 0;
-    overflow: hidden;
-    color: var(--text-muted);
-    font-size: var(--font-ui-smaller);
-    letter-spacing: 0.06em;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
 .empathy-canvas-character-input,
+.empathy-canvas-entry-input,
 .empathy-canvas-portal-input,
 .empathy-canvas-portal-select {
     min-width: 48px;
@@ -223,6 +214,7 @@
 }
 
 .empathy-canvas-character-input:focus,
+.empathy-canvas-entry-input:focus,
 .empathy-canvas-portal-input:focus,
 .empathy-canvas-portal-select:focus {
     border-color: var(--empathy-node-accent);
@@ -233,6 +225,24 @@
 .empathy-canvas-node > .canvas-node-container > .canvas-node-content {
     box-sizing: border-box;
     padding-top: 40px;
+}
+
+.empathy-canvas-node-header-only > .empathy-canvas-node-header {
+    min-height: 100%;
+    height: auto;
+    justify-content: flex-start;
+    border-bottom: 0;
+    border-radius: var(--radius-m);
+}
+
+.empathy-canvas-node-header-only > .empathy-canvas-node-header > * {
+    flex-shrink: 0;
+}
+
+.empathy-canvas-node-header-only > .canvas-node-container > .canvas-node-content {
+    visibility: hidden;
+    pointer-events: none;
+    user-select: none;
 }
 
 .empathy-canvas-node-say > .canvas-node-container > .canvas-node-content {
@@ -252,10 +262,6 @@
     background: color-mix(in srgb, var(--empathy-node-accent) 18%, var(--background-primary));
 }
 
-.canvas-wrapper.mod-zoomed-out .empathy-canvas-node-hint {
-    display: none;
-}
-
 .empathy-canvas-node-title {
     display: flex;
     min-height: 28px;
@@ -264,11 +270,13 @@
 }
 
 .empathy-canvas-node-title .empathy-canvas-character-input,
+.empathy-canvas-node-title .empathy-canvas-entry-input,
 .empathy-canvas-node-title .empathy-canvas-portal-input,
 .empathy-canvas-node-title .empathy-canvas-portal-select {
     margin-inline-start: auto;
 }
 
+.empathy-canvas-entry-input,
 .empathy-canvas-portal-input,
 .empathy-canvas-portal-select {
     width: 120px;
@@ -402,15 +410,6 @@
 .empathy-choice-add {
     width: 100%;
     flex: 0 0 auto;
-}
-
-.empathy-canvas-node-entry > .canvas-node-container > .canvas-node-content {
-    padding-top: 82px;
-}
-
-.empathy-canvas-node-choice > .canvas-node-container > .canvas-node-content,
-.empathy-canvas-node-set > .canvas-node-container > .canvas-node-content {
-    padding-top: var(--empathy-node-header-height, 82px);
 }
 
 .empathy-variable-picker {
