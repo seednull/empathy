@@ -251,6 +251,9 @@ validation reports them instead of silently replacing them.
 
 Precise node placement remains available from the Canvas background menu. The same node actions are
 available in the command palette, and an existing text card can be converted from its context menu.
+Dropping a dragged connection in empty space adds every Empathy node kind to the native popup; the
+selected node is created at the drop point and the new edge preserves the dragged source and target
+sides.
 Every typed card has a persistent visual header. `SAY` has a separate character input; `SET` has a
 list of ordered typed variable/operation/literal assignments; `ENTRY` edits its name in the header
 and can have one typed availability predicate and a

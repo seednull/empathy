@@ -34,6 +34,8 @@ import {
 interface CanvasPoint { x: number; y: number }
 interface CanvasSize { width: number; height: number }
 interface CanvasRect extends CanvasPoint, CanvasSize {}
+type CanvasSide = "top" | "right" | "bottom" | "left";
+type CanvasNodePosition = CanvasSide | "center";
 
 interface CanvasUi {
     setIcon(parent: HTMLElement, icon: string): void;
@@ -48,6 +50,8 @@ interface CanvasUi {
 interface RuntimeCanvasNode extends CanvasNode {
     canvas: RuntimeCanvas;
     nodeEl: HTMLElement;
+    x: number;
+    y: number;
     isEditing: boolean;
     setData(data: CanvasNodeData): void;
     setIsEditing(editing: boolean, ...args: unknown[]): void;
@@ -59,6 +63,8 @@ interface RuntimeCanvasNode extends CanvasNode {
 
 interface RuntimeCanvasEdge extends CanvasEdge {
     canvas: RuntimeCanvas;
+    from: { side: CanvasSide; node: RuntimeCanvasNode; end: unknown };
+    to: { side: CanvasSide; node: RuntimeCanvasNode; end: unknown };
     lineGroupEl: SVGElement;
     getCenter(): CanvasPoint;
     setData(data: CanvasEdgeData): void;
@@ -78,7 +84,7 @@ interface RuntimeCanvas extends Canvas {
     createTextNode(options: {
         pos: CanvasPoint;
         size?: CanvasSize;
-        position?: "center";
+        position?: CanvasNodePosition;
         text?: string;
         save?: boolean;
         focus?: boolean;
@@ -86,6 +92,7 @@ interface RuntimeCanvas extends Canvas {
     posCenter(): CanvasPoint;
     selectOnly(item: RuntimeCanvasNode | RuntimeCanvasEdge): void;
     markDirty(item: RuntimeCanvasNode | RuntimeCanvasEdge): void;
+    removeEdge(edge: RuntimeCanvasEdge): void;
     requestSave(pushHistory?: boolean): void;
     importData(data: { nodes: CanvasNodeData[]; edges: CanvasEdgeData[] }, clearMissing: boolean): void;
     setReadonly(readonly: boolean): void;
@@ -353,9 +360,16 @@ export class EmpathyCanvasIntegration {
         const canvasEvents = workspace as unknown as {
             on(name: "canvas:node-menu", callback: (menu: Menu, node: RuntimeCanvasNode) => void): EventRef;
             on(name: "canvas:edge-menu", callback: (menu: Menu, edge: RuntimeCanvasEdge) => void): EventRef;
+            on(name: "canvas:node-connection-drop-menu", callback: (
+                menu: Menu,
+                node: RuntimeCanvasNode,
+                edge: RuntimeCanvasEdge,
+            ) => void): EventRef;
         };
         this.plugin.registerEvent(canvasEvents.on("canvas:node-menu", (menu, node) => this.addNodeMenuItems(menu, node)));
         this.plugin.registerEvent(canvasEvents.on("canvas:edge-menu", (menu, edge) => this.addEdgeMenuItems(menu, edge)));
+        this.plugin.registerEvent(canvasEvents.on("canvas:node-connection-drop-menu", (menu, node, edge) =>
+            this.addConnectionDropMenuItems(menu, node, edge)));
         this.plugin.register(() => this.unload());
         refresh();
     }
@@ -550,10 +564,15 @@ export class EmpathyCanvasIntegration {
         return runtime;
     }
 
-    createNode(canvas: Canvas, kind: EmpathyCanvasNodeKind, pos?: CanvasPoint, requestedSize?: CanvasSize): RuntimeCanvasNode {
+    createNode(
+        canvas: Canvas,
+        kind: EmpathyCanvasNodeKind,
+        pos?: CanvasPoint,
+        requestedSize?: CanvasSize,
+        position?: CanvasNodePosition,
+    ): RuntimeCanvasNode {
         const runtime = this.patchCanvas(canvas);
         if (runtime.readonly) throw new Error("active Canvas is read-only");
-        const centered = pos === undefined;
         let metadata: Partial<CanvasNodeData> = {};
         if (kind === EmpathyCanvasNodeKind.PORTAL_TRANSMITTER) {
             metadata = { empathyPortalId: this.newPortalId(runtime), empathyPortalName: this.newPortalName(runtime) };
@@ -570,7 +589,7 @@ export class EmpathyCanvasIntegration {
             kind,
             pos ?? runtime.posCenter(),
             requestedSize ?? nodeSizes[kind],
-            centered,
+            position ?? (pos === undefined ? "center" : undefined),
             metadata,
         );
         runtime.selectOnly(node);
@@ -586,7 +605,7 @@ export class EmpathyCanvasIntegration {
         kind: EmpathyCanvasNodeKind,
         pos: CanvasPoint,
         size: CanvasSize,
-        centered: boolean,
+        position?: CanvasNodePosition,
         metadata: Partial<CanvasNodeData> = {},
     ): RuntimeCanvasNode {
         const defaults = semanticDefaults(kind);
@@ -596,7 +615,7 @@ export class EmpathyCanvasIntegration {
         const node = runtime.createTextNode({
             pos,
             size,
-            position: centered ? "center" : undefined,
+            position,
             text: initialText(kind),
             save: false,
             focus: false,
@@ -1863,6 +1882,31 @@ export class EmpathyCanvasIntegration {
             .setIcon("circle-off").onClick(() => this.removeNodeKind(node)));
     }
 
+    private addConnectionDropMenuItems(menu: Menu, source: RuntimeCanvasNode, pendingEdge: RuntimeCanvasEdge): void {
+        const canvas = source.canvas;
+        if (
+            this.disposed || canvas.readonly || pendingEdge.canvas !== canvas ||
+            pendingEdge.from.node !== source
+        ) return;
+        const drop = pendingEdge.to.node;
+        if (!Number.isFinite(drop.x) || !Number.isFinite(drop.y)) return;
+        const pos = { x: drop.x, y: drop.y };
+        const fromSide = pendingEdge.from.side;
+        const toSide = pendingEdge.to.side;
+        for (const kind of creationNodeKinds) {
+            menu.addItem((item) => item.setTitle(`Add Empathy ${nodeLabels[kind]}`).setSection("action")
+                .setIcon(nodeIcons[kind]).onClick(() => {
+                    try {
+                        canvas.removeEdge(pendingEdge);
+                        const target = this.createNode(canvas, kind, pos, nodeSizes[kind], toSide);
+                        this.connectNodes(source, target, fromSide, toSide, pendingEdge.id);
+                    } catch (error) {
+                        this.ui.showNotice(`Empathy connected node creation failed: ${error instanceof Error ? error.message : String(error)}`);
+                    }
+                }));
+        }
+    }
+
     private createContinuation(source: RuntimeCanvasNode, kind: EmpathyCanvasNodeKind): void {
         const canvas = source.canvas;
         if (canvas.readonly) return;
@@ -1880,21 +1924,27 @@ export class EmpathyCanvasIntegration {
         }
     }
 
-    private connectNodes(source: RuntimeCanvasNode, target: RuntimeCanvasNode): void {
+    private connectNodes(
+        source: RuntimeCanvasNode,
+        target: RuntimeCanvasNode,
+        fromSide: CanvasSide = "bottom",
+        toSide: CanvasSide = "top",
+        excludedEdgeId?: string,
+    ): void {
         const canvas = source.canvas;
         const sourceData = source.getData();
         const targetData = target.getData();
         const random = source.nodeEl.ownerDocument.defaultView!.crypto.getRandomValues(new Uint32Array(2));
         let edgeId = Array.from(random, (value) => value.toString(16).padStart(8, "0")).join("");
-        while (canvas.edges.has(edgeId)) edgeId += "0";
+        while (canvas.edges.has(edgeId) || edgeId === excludedEdgeId) edgeId += "0";
         canvas.importData({
             nodes: [sourceData, targetData],
             edges: [{
                 id: edgeId,
                 fromNode: source.id,
-                fromSide: "bottom",
+                fromSide,
                 toNode: target.id,
-                toSide: "top",
+                toSide,
             }],
         }, false);
         canvas.requestSave();

@@ -4,6 +4,7 @@ import { test } from "node:test";
 import { EmpathyBytecodeInstructionSize, EmpathyBytecodeOpcode } from "./bytecode";
 import {
     convertedEmpathyNodeData,
+    EmpathyCanvasIntegration,
     formatChoiceBadge,
     formatTransitionBadge,
     repairDuplicatedNodeAtoms,
@@ -50,6 +51,27 @@ class MockEdge implements CanvasEdge {
     }
     getData(): CanvasEdgeData { return { id: this.id, ...this.data }; }
     setData(data: CanvasEdgeData): void { this.data = data; }
+}
+
+class MockMenuItem {
+    title = "";
+    section = "";
+    icon = "";
+    click?: () => void;
+    setTitle(value: string): this { this.title = value; return this; }
+    setSection(value: string): this { this.section = value; return this; }
+    setIcon(value: string): this { this.icon = value; return this; }
+    onClick(callback: () => void): this { this.click = callback; return this; }
+}
+
+class MockMenu {
+    readonly items: MockMenuItem[] = [];
+    addItem(configure: (item: MockMenuItem) => unknown): this {
+        const item = new MockMenuItem();
+        configure(item);
+        this.items.push(item);
+        return this;
+    }
 }
 
 let nextTestLineAtom = 100;
@@ -362,6 +384,119 @@ test("formats CHOICE badges from node options and ignores native edge labels", (
     const leave = choice("Leave", undefined, 20);
     assert.equal(formatChoiceBadge({ empathyChoiceAtom: 20, label: "Unrelated author text" }, [climb, leave]), "Leave");
     assert.equal(formatChoiceBadge({ label: "Anything the author wants" }, [climb]), "Unlinked choice");
+});
+
+test("adds every Empathy node kind to the connection-drop menu and preserves edge placement", () => {
+    const handlers = new Map<string, (...args: unknown[]) => void>();
+    const workspace = {
+        getLeavesOfType: () => [],
+        on: (name: string, callback: (...args: never[]) => void) => {
+            handlers.set(name, callback as unknown as (...args: unknown[]) => void);
+            return {};
+        },
+        onLayoutReady: (_callback: () => void) => undefined,
+    };
+    const plugin = {
+        app: { workspace },
+        registerEvent: (_event: unknown) => undefined,
+        register: (_cleanup: () => void) => undefined,
+    };
+    const notices: string[] = [];
+    const integration = new EmpathyCanvasIntegration(plugin as never, {
+        setIcon: () => undefined,
+        setTooltip: () => undefined,
+        showNotice: (message: string) => notices.push(message),
+        getVariables: () => [],
+        openPanel: () => undefined,
+        allocateAtom: () => ({ value: 1 }),
+        atomsChanged: () => undefined,
+    } as never);
+    const createdNode = { id: "created" };
+    const createCalls: unknown[][] = [];
+    const connectCalls: unknown[][] = [];
+    const harness = integration as unknown as {
+        createNode: (...args: unknown[]) => unknown;
+        connectNodes: (...args: unknown[]) => void;
+    };
+    harness.createNode = (...args) => { createCalls.push(args); return createdNode; };
+    harness.connectNodes = (...args) => { connectCalls.push(args); };
+    integration.register();
+
+    const removed: unknown[] = [];
+    const canvas = { readonly: false, removeEdge: (edge: unknown) => removed.push(edge) };
+    const source = { id: "source", canvas };
+    const pendingEdge = {
+        id: "temporary-edge",
+        canvas,
+        from: { node: source, side: "right", end: "from" },
+        to: { node: { x: 640, y: 360 }, side: "left", end: "to" },
+    };
+    const menu = new MockMenu();
+    const handler = handlers.get("canvas:node-connection-drop-menu");
+    assert.ok(handler);
+    handler(menu, source, pendingEdge);
+    assert.deepEqual(menu.items.map(({ title }) => title), [
+        "Add Empathy ENTRY",
+        "Add Empathy SAY",
+        "Add Empathy LINE",
+        "Add Empathy CHOICE",
+        "Add Empathy SET",
+        "Add Empathy RECEIVER",
+        "Add Empathy TRANSMITTER",
+        "Add Empathy END",
+    ]);
+    assert.ok(menu.items.every(({ section, icon, click }) => section === "action" && icon.length > 0 && click));
+
+    menu.items.find(({ title }) => title === "Add Empathy LINE")!.click!();
+    assert.deepEqual(removed, [pendingEdge]);
+    assert.deepEqual(createCalls, [[canvas, EmpathyCanvasNodeKind.LINE, { x: 640, y: 360 }, { width: 360, height: 160 }, "left"]]);
+    assert.deepEqual(connectCalls, [[source, createdNode, "right", "left", "temporary-edge"]]);
+    assert.deepEqual(notices, []);
+
+    canvas.readonly = true;
+    const readonlyMenu = new MockMenu();
+    handler(readonlyMenu, source, pendingEdge);
+    assert.deepEqual(readonlyMenu.items, []);
+});
+
+test("keeps a replacement edge distinct from the native provisional edge", () => {
+    const integration = new EmpathyCanvasIntegration({} as never, {} as never);
+    const pendingId = "123456789abcdef0";
+    const imported: Array<{ nodes: CanvasNodeData[]; edges: CanvasEdgeData[] }> = [];
+    let saves = 0;
+    const edges = new Map<string, CanvasEdgeData>();
+    const canvas = {
+        edges,
+        importData: (data: { nodes: CanvasNodeData[]; edges: CanvasEdgeData[] }) => {
+            imported.push(data);
+            for (const edge of data.edges) edges.set(String(edge.id), edge);
+        },
+        requestSave: () => { ++saves; },
+    };
+    const ownerDocument = { defaultView: { crypto: { getRandomValues: (values: Uint32Array) => {
+        values[0] = 0x12345678;
+        values[1] = 0x9ABCDEF0;
+        return values;
+    } } } };
+    const source = { id: "source", canvas, nodeEl: { ownerDocument }, getData: () => ({ id: "source" }) };
+    const target = { id: "target", getData: () => ({ id: "target" }) };
+    const harness = integration as unknown as {
+        connectNodes: (...args: unknown[]) => void;
+    };
+    harness.connectNodes(source, target, "right", "left", pendingId);
+
+    assert.equal(imported.length, 1);
+    assert.deepEqual(imported[0].nodes, [{ id: "source" }, { id: "target" }]);
+    assert.deepEqual(imported[0].edges, [{
+        id: `${pendingId}0`,
+        fromNode: "source",
+        fromSide: "right",
+        toNode: "target",
+        toSide: "left",
+    }]);
+    assert.equal(edges.has(pendingId), false);
+    assert.equal(edges.has(`${pendingId}0`), true);
+    assert.equal(saves, 1);
 });
 
 test("rejects obsolete Canvas shapes without migrating their metadata", () => {
