@@ -1,423 +1,455 @@
 import { strict as assert } from "node:assert";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import { test } from "node:test";
 
-import {
-    EmpathyBytecodeInstructionSize,
-    EmpathyBytecodeOpcode,
-} from "./bytecode";
+import { EmpathyBytecodeInstructionSize, EmpathyBytecodeOpcode } from "./bytecode";
+import { convertedEmpathyNodeData, formatChoiceBadge, formatTransitionBadge } from "./canvas";
 import {
     Canvas,
     CanvasEdge,
+    CanvasEdgeData,
     CanvasNode,
     CanvasNodeData,
     compileCanvas,
     EmpathyCanvasNodeKind,
-    type EmpathyCanvasNodeKind as EmpathyCanvasNodeKindValue,
     generateHeader,
+    NarrativeCondition,
+    NarrativeVariable,
+    parseVariableName,
+    validateCanvas,
 } from "./compile";
-import { convertedEmpathyNodeData } from "./canvas";
 
 class MockNode implements CanvasNode {
-    constructor(
-        readonly id: string,
-        private readonly text: string,
-        private readonly empathyKind?: EmpathyCanvasNodeKindValue,
-        private readonly extraData: Partial<CanvasNodeData> = {},
-    ) {}
-
-    getData(): CanvasNodeData {
-        return {
-            id: this.id,
-            type: "text",
-            text: this.text,
-            ...(this.empathyKind === undefined ? {} : { empathyKind: this.empathyKind }),
-            ...this.extraData,
-        };
-    }
+    constructor(readonly id: string, private data: CanvasNodeData) {}
+    getData(): CanvasNodeData { return { id: this.id, type: "text", text: "", ...this.data }; }
+    setData(data: CanvasNodeData): void { this.data = data; }
 }
 
 class MockEdge implements CanvasEdge {
     readonly from: { node: CanvasNode };
     readonly to: { node: CanvasNode };
-
-    constructor(
-        readonly id: string,
-        from: CanvasNode,
-        to: CanvasNode,
-        private readonly edgeLabel?: string,
-    ) {
+    constructor(readonly id: string, from: CanvasNode, to: CanvasNode, private data: CanvasEdgeData = {}) {
         this.from = { node: from };
         this.to = { node: to };
     }
-
-    getData(): { id: string; label?: string } {
-        return { id: this.id, label: this.edgeLabel };
-    }
+    getData(): CanvasEdgeData { return { id: this.id, ...this.data }; }
+    setData(data: CanvasEdgeData): void { this.data = data; }
 }
 
-function canvas(nodes: MockNode[], edges: MockEdge[]): Canvas {
+function node(id: string, kind: string, data: Partial<CanvasNodeData> = {}): MockNode {
+    return new MockNode(id, { text: kind === EmpathyCanvasNodeKind.ENTRY ? id : "", empathyKind: kind, ...data });
+}
+
+function graph(nodes: MockNode[], edges: MockEdge[]): Canvas {
     return {
-        nodes: new Map(nodes.map((node) => [node.id, node])),
-        edges: new Map(edges.map((edge) => [edge.id, edge])),
+        nodes: new Map(nodes.map((value) => [value.id, value])),
+        edges: new Map(edges.map((value) => [value.id, value])),
     };
 }
 
-function decodedInstructions(bytecode: Uint8Array): Array<{ offset: number; opcode: number }> {
+const variables: NarrativeVariable[] = [
+    { name: "world.radio_found", type: "boolean", access: "read-write" },
+    { name: "npc.trust", type: "float", access: "read-write" },
+    { name: "world.time", type: "float", access: "read" },
+    { name: "quest.stage", type: "integer", access: "read-write" },
+];
+
+interface Instruction { offset: number; opcode: number; size: number }
+
+function decode(bytecode: Uint8Array): Instruction[] {
     const sizes = new Map<number, number>();
     for (const name of Object.keys(EmpathyBytecodeOpcode) as Array<keyof typeof EmpathyBytecodeOpcode>) {
         sizes.set(EmpathyBytecodeOpcode[name], EmpathyBytecodeInstructionSize[name]);
     }
-
-    const instructions: Array<{ offset: number; opcode: number }> = [];
+    const result: Instruction[] = [];
     for (let offset = 0; offset < bytecode.length;) {
         const opcode = bytecode[offset];
         const size = sizes.get(opcode);
         assert.notEqual(size, undefined, `unknown opcode at ${offset}`);
-        instructions.push({ offset, opcode });
+        result.push({ offset, opcode, size: size! });
         offset += size!;
-        assert.ok(offset <= bytecode.length, "instruction extends past bytecode payload");
+        assert.ok(offset <= bytecode.length, "instruction crosses the bytecode boundary");
     }
-    return instructions;
+    return result;
 }
 
-test("compiles branching Canvas runtime objects with deterministic choices and convergence", () => {
-    const entry = new MockNode("entry", "", EmpathyCanvasNodeKind.ENTRY);
-    const intro = new MockNode(
-        "intro",
-        "The signal tower is still lit.",
-        EmpathyCanvasNodeKind.SAY,
-        { empathyCharacter: "Mara" },
-    );
-    const choice = new MockNode("choice", "", EmpathyCanvasNodeKind.CHOICE);
-    const signal = new MockNode(
-        "signal",
-        "The lamp is warm.",
-        EmpathyCanvasNodeKind.SAY,
-        { empathyCharacter: "Mara" },
-    );
-    const footprints = new MockNode(
-        "footprints",
-        "Fresh footprints.",
-        EmpathyCanvasNodeKind.SAY,
-        { empathyCharacter: "Ilya" },
-    );
-    const end = new MockNode("end", "", EmpathyCanvasNodeKind.END);
-    const result = compileCanvas(canvas(
-        [entry, intro, choice, signal, footprints, end],
-        [
-            new MockEdge("01-entry", entry, intro),
-            new MockEdge("02-intro", intro, choice),
-            new MockEdge("choice-b", choice, footprints, "Follow the footprints"),
-            new MockEdge("choice-a", choice, signal, "Climb to the signal room"),
-            new MockEdge("04-signal", signal, end),
-            new MockEdge("05-footprints", footprints, end),
-        ],
-    ));
+function view(bytecode: Uint8Array): DataView {
+    return new DataView(bytecode.buffer, bytecode.byteOffset, bytecode.byteLength);
+}
 
-    assert.deepEqual(result.choices, ["Climb to the signal room", "Follow the footprints"]);
-    assert.deepEqual(result.characters, ["Mara", "Ilya"]);
-    assert.deepEqual(result.lines, [
-        "The signal tower is still lit.",
-        "The lamp is warm.",
-        "Fresh footprints.",
-    ]);
-    assert.equal(result.nodeOffsets.size, 5, "ENTRY emits nothing and converging END emits once");
-    assert.deepEqual(Object.fromEntries(result.nodeOffsets), {
-        intro: 0,
-        choice: 32,
-        signal: 97,
-        footprints: 129,
-        end: 161,
-    });
-    assert.equal(result.bytecode.length, 162);
+function simpleEndGraph(): { canvas: Canvas; entry: MockNode; end: MockNode } {
+    const entry = node("entry", EmpathyCanvasNodeKind.ENTRY, { text: "start" });
+    const end = node("end", EmpathyCanvasNodeKind.END);
+    return { canvas: graph([entry, end], [new MockEdge("entry-end", entry, end)]), entry, end };
+}
 
-    const view = new DataView(result.bytecode.buffer, result.bytecode.byteOffset, result.bytecode.byteLength);
-    assert.equal(result.bytecode[0], EmpathyBytecodeOpcode.YIELD_PUSH_ATOM);
-    assert.equal(view.getUint32(1, true), 0, "line atom type is little-endian");
-    assert.equal(view.getUint32(5, true), 0, "line atom id is little-endian");
-    assert.equal(view.getUint32(10, true), 1, "character atom type is little-endian");
-    assert.equal(view.getUint32(14, true), 0, "character atom id is little-endian");
-    assert.equal(view.getUint32(19, true), 2, "SAY yield index is little-endian");
-    assert.equal(view.getBigUint64(24, true), 32n, "node jump target is little-endian");
-    assert.equal(view.getUint32(51, true), 2, "choice count is little-endian");
-
-    const instructions = decodedInstructions(result.bytecode);
-    const boundaries = new Set(instructions.map(({ offset }) => offset));
-    const jumps: Array<[number, number]> = [];
-    assert.equal(instructions.at(-1)?.opcode, EmpathyBytecodeOpcode.END);
-    assert.equal(instructions.filter(({ opcode }) => opcode === EmpathyBytecodeOpcode.END).length, 1);
-    for (const { offset, opcode } of instructions) {
-        if (
-            opcode === EmpathyBytecodeOpcode.JUMP ||
-            opcode === EmpathyBytecodeOpcode.JUMP_FALSE ||
-            opcode === EmpathyBytecodeOpcode.JUMP_TRUE
-        ) {
-            const target = Number(view.getBigUint64(offset + 1, true));
-            assert.ok(boundaries.has(target), `jump at ${offset} targets instruction boundary ${target}`);
-            jumps.push([offset, target]);
-        }
+test("parses exactly one qualified-name separator", () => {
+    assert.deepEqual(parseVariableName("world.time"), { tableName: "world", variableName: "time" });
+    for (const invalid of ["world", ".time", "world.", "world.weather.time", " world.time"]) {
+        assert.equal(parseVariableName(invalid), undefined);
     }
-    assert.deepEqual(jumps, [
-        [23, 32],
-        [68, 87],
-        [78, 97],
-        [88, 129],
-        [120, 161],
-        [152, 161],
+});
+
+test("formats independent conditional and else edge badges from metadata", () => {
+    assert.equal(formatTransitionBadge({
+        empathyCondition: { variable: "npc.trust", comparison: ">=", literal: "0.5" },
+        empathyConditionOrder: 0,
+    }), "if npc.trust ≥ 0.5");
+    assert.equal(formatTransitionBadge({ empathyElse: true }), "else");
+    assert.equal(formatTransitionBadge({
+        empathyCondition: { variable: "world.radio_found", comparison: "==", literal: "true" },
+        empathyConditionOrder: 2,
+    }), "if world.radio_found is true");
+});
+
+test("formats CHOICE badges from node options and ignores native edge labels", () => {
+    assert.equal(formatChoiceBadge({ empathyChoiceIndex: 1, label: "Unrelated author text" }, ["Climb", "Leave"]), "Leave");
+    assert.equal(formatChoiceBadge({ label: "Anything the author wants" }, ["Climb"]), "Unlinked choice");
+});
+
+test("derives real parameter tables by first variable occurrence", () => {
+    const result = compileCanvas(simpleEndGraph().canvas, variables);
+    assert.deepEqual(result.tables, [
+        { name: "world", index: 0 },
+        { name: "npc", index: 1 },
+        { name: "quest", index: 2 },
     ]);
-    for (const entryPoint of result.entryPoints) {
-        assert.ok(boundaries.has(entryPoint.executionOffset));
-    }
-
-    const header = generateHeader(result, "radio");
-    assert.ok(header.startsWith("#pragma once\n\n"));
-    assert.match(header, /^#include <empathy\.h>$/m);
-    assert.doesNotMatch(header, /^#(?:if|ifdef|ifndef|endif)\b/m);
-    assert.doesNotMatch(header, /RADIO_EMPATHY_GENERATED_H|<stddef\.h>|\bNULL\b/);
-    assert.doesNotMatch(header, /#define RADIO_EMPATHY_(?:ATOM|YIELD)_TYPE_/);
-    assert.match(
-        header,
-        /typedef enum RADIO_EMPATHY_AtomType_t\n\{\n    RADIO_EMPATHY_ATOM_TYPE_LINE = 0,\n    RADIO_EMPATHY_ATOM_TYPE_CHARACTER = 1,\n    RADIO_EMPATHY_ATOM_TYPE_CHOICE = 2,\n\} RADIO_EMPATHY_AtomType;/,
-    );
-    assert.match(
-        header,
-        /typedef enum RADIO_EMPATHY_YieldType_t\n\{\n    RADIO_EMPATHY_YIELD_TYPE_LINE = 0,\n    RADIO_EMPATHY_YIELD_TYPE_CHOICE = 1,\n    RADIO_EMPATHY_YIELD_TYPE_SAY = 2,\n\} RADIO_EMPATHY_YieldType;/,
-    );
-    assert.match(header, /RADIO_EMPATHY_CHOICE_0 0u/);
-    assert.match(header, /\{0u, EMPATHY_PROGRAM_OFFSET_NONE\}/);
-    assert.match(header, /EMPATHY_VALUE_BASE_TYPE_UINT32/);
-    const unicodeHeader = generateHeader({ ...result, lines: [...result.lines, "Маяк 👋"] }, "radio");
-    assert.doesNotMatch(unicodeHeader, /[^\x00-\x7F]/, "generated header is source-encoding independent");
-    assert.match(unicodeHeader, /\\320\\234/, "UTF-8 bytes use fixed-width octal escapes");
-
-    const emptyTablesHeader = generateHeader({ ...result, characters: [], choices: [] }, "empty-tables");
-    assert.doesNotMatch(emptyTablesHeader, /\bNULL\b/);
-    assert.match(
-        emptyTablesHeader,
-        /static const char \*const empty_tables_empathy_character_strings\[\] =\n\{\n    0,\n\};/,
-    );
+    assert.deepEqual(result.parameters.map(({ name, tableIndex, parameterIndex }) => ({ name, tableIndex, parameterIndex })), [
+        { name: "world.radio_found", tableIndex: 0, parameterIndex: 0 },
+        { name: "npc.trust", tableIndex: 1, parameterIndex: 1 },
+        { name: "world.time", tableIndex: 0, parameterIndex: 2 },
+        { name: "quest.stage", tableIndex: 2, parameterIndex: 3 },
+    ]);
 });
 
-test("reports focused Canvas semantic errors", () => {
-    const end = new MockNode("end", "", EmpathyCanvasNodeKind.END);
-    assert.throws(() => compileCanvas(canvas([end], [])), /no ENTRY/);
-
-    const entry = new MockNode("entry", "", EmpathyCanvasNodeKind.ENTRY);
-    const unknown = new MockNode("unknown", "NOTE\nNot narrative");
-    assert.throws(
-        () => compileCanvas(canvas([entry, unknown], [new MockEdge("edge", entry, unknown)])),
-        /expected empathyKind metadata/,
-    );
-
-    const choice = new MockNode("choice", "", EmpathyCanvasNodeKind.CHOICE);
-    assert.throws(
-        () => compileCanvas(canvas([entry, choice], [new MockEdge("edge", entry, choice)])),
-        /at least one outgoing edge/,
-    );
+test("lowers SET values and arithmetic with global parameter indices", () => {
+    const entry = node("entry", EmpathyCanvasNodeKind.ENTRY);
+    const set = node("set", EmpathyCanvasNodeKind.SET, { empathyAssignments: [
+        { variable: "world.radio_found", operation: "=", literal: "true" },
+        { variable: "npc.trust", operation: "+=", literal: "0.1" },
+        { variable: "quest.stage", operation: "+=", literal: "1" },
+    ] });
+    const end = node("end", EmpathyCanvasNodeKind.END);
+    const result = compileCanvas(graph(
+        [entry, set, end],
+        [new MockEdge("e0", entry, set), new MockEdge("e1", set, end)],
+    ), variables);
+    const instructions = decode(result.bytecode);
+    assert.deepEqual(instructions.map(({ opcode }) => opcode), [
+        EmpathyBytecodeOpcode.PUSH_U8, EmpathyBytecodeOpcode.STORE,
+        EmpathyBytecodeOpcode.LOAD, EmpathyBytecodeOpcode.PUSH_F32, EmpathyBytecodeOpcode.ADD,
+        EmpathyBytecodeOpcode.STORE,
+        EmpathyBytecodeOpcode.LOAD, EmpathyBytecodeOpcode.PUSH_I32, EmpathyBytecodeOpcode.ADD,
+        EmpathyBytecodeOpcode.STORE, EmpathyBytecodeOpcode.JUMP, EmpathyBytecodeOpcode.END,
+    ]);
+    const data = view(result.bytecode);
+    const loadStores = instructions.filter(({ opcode }) => opcode === EmpathyBytecodeOpcode.LOAD || opcode === EmpathyBytecodeOpcode.STORE);
+    assert.deepEqual(loadStores.map(({ offset }) => data.getUint32(offset + 1, true)), [0, 1, 1, 3, 3]);
+    const floatPush = instructions.find(({ opcode }) => opcode === EmpathyBytecodeOpcode.PUSH_F32)!;
+    const integerPush = instructions.find(({ opcode }) => opcode === EmpathyBytecodeOpcode.PUSH_I32)!;
+    assert.ok(Math.abs(data.getFloat32(floatPush.offset + 1, true) - 0.1) < 1e-6);
+    assert.equal(data.getInt32(integerPush.offset + 1, true), 1);
 });
 
-test("prefixes generated C identifiers for digit-leading Canvas names", () => {
-    const entry = new MockNode("entry", "", EmpathyCanvasNodeKind.ENTRY);
-    const end = new MockNode("end", "", EmpathyCanvasNodeKind.END);
-    const result = compileCanvas(canvas([entry, end], [new MockEdge("entry-end", entry, end)]));
-    const header = generateHeader(result, "123-radio");
-
-    assert.match(header, /typedef enum CANVAS_123_RADIO_EMPATHY_AtomType_t/);
-    assert.match(header, /static const Empathy_ProgramLayoutDesc canvas_123_radio_empathy_layout_desc/);
+test("rejects SET writes through read-only variables", () => {
+    const entry = node("entry", EmpathyCanvasNodeKind.ENTRY);
+    const set = node("set", EmpathyCanvasNodeKind.SET, { empathyAssignments: [
+        { variable: "world.time", operation: "=", literal: "1" },
+    ] });
+    const end = node("end", EmpathyCanvasNodeKind.END);
+    assert.throws(() => compileCanvas(graph(
+        [entry, set, end],
+        [new MockEdge("a", entry, set), new MockEdge("b", set, end)],
+    ), variables), /read-only/);
 });
 
-test("lowers LINE directly to a line yield", () => {
-    const entry = new MockNode("entry", "", EmpathyCanvasNodeKind.ENTRY);
-    const line = new MockNode(
-        "line",
-        "Rain erased the road behind the last train.",
-        EmpathyCanvasNodeKind.LINE,
-    );
-    const end = new MockNode("end", "", EmpathyCanvasNodeKind.END);
-    const result = compileCanvas(canvas(
-        [entry, line, end],
-        [new MockEdge("entry-line", entry, line), new MockEdge("line-end", line, end)],
-    ));
-
-    assert.deepEqual(result.lines, ["Rain erased the road behind the last train."]);
-    assert.equal(result.bytecode.length, 24);
-    assert.equal(result.bytecode[0], EmpathyBytecodeOpcode.YIELD_PUSH_ATOM);
-    assert.equal(result.bytecode[9], EmpathyBytecodeOpcode.YIELD);
-    assert.equal(result.bytecode[14], EmpathyBytecodeOpcode.JUMP);
-    assert.equal(result.bytecode[23], EmpathyBytecodeOpcode.END);
-    const view = new DataView(result.bytecode.buffer, result.bytecode.byteOffset, result.bytecode.byteLength);
-    assert.equal(view.getUint32(10, true), 0);
-    assert.equal(view.getBigUint64(15, true), 23n);
+test("resolves Canvas references by name after variable reordering", () => {
+    const entry = node("entry", EmpathyCanvasNodeKind.ENTRY);
+    const set = node("set", EmpathyCanvasNodeKind.SET, { empathyAssignments: [
+        { variable: "quest.stage", operation: "=", literal: "2" },
+    ] });
+    const end = node("end", EmpathyCanvasNodeKind.END);
+    const canvas = graph([entry, set, end], [new MockEdge("a", entry, set), new MockEdge("b", set, end)]);
+    const reordered = [variables[3], variables[0], variables[1], variables[2]];
+    const result = compileCanvas(canvas, reordered);
+    const store = decode(result.bytecode).find(({ opcode }) => opcode === EmpathyBytecodeOpcode.STORE)!;
+    assert.equal(view(result.bytecode).getUint32(store.offset + 1, true), 0);
+    assert.equal(set.getData().empathyAssignments?.[0].variable, "quest.stage");
 });
 
-test("compiles metadata-typed Canvas nodes", () => {
-    const entry = new MockNode("entry", "", EmpathyCanvasNodeKind.ENTRY);
-    const say = new MockNode(
-        "say",
-        "The signal tower is still lit.",
-        EmpathyCanvasNodeKind.SAY,
-        { empathyCharacter: "Mara" },
-    );
-    const choice = new MockNode("choice", "", EmpathyCanvasNodeKind.CHOICE);
-    const line = new MockNode(
-        "line",
-        "Rain erased the road behind the last train.",
-        EmpathyCanvasNodeKind.LINE,
-    );
-    const end = new MockNode("end", "", EmpathyCanvasNodeKind.END);
-    const result = compileCanvas(canvas(
-        [entry, say, choice, line, end],
+test("lowers ordered conditional edges and an else directly", () => {
+    const entry = node("entry", EmpathyCanvasNodeKind.ENTRY);
+    const say = node("say", EmpathyCanvasNodeKind.SAY, { text: "Can we trust it?", empathyCharacter: "Mara" });
+    const lineA = node("line-a", EmpathyCanvasNodeKind.LINE, { text: "Yes." });
+    const lineB = node("line-b", EmpathyCanvasNodeKind.LINE, { text: "Not yet." });
+    const end = node("end", EmpathyCanvasNodeKind.END);
+    const condition: NarrativeCondition = { variable: "npc.trust", comparison: ">=", literal: "0.5" };
+    const result = compileCanvas(graph(
+        [entry, say, lineA, lineB, end],
         [
             new MockEdge("entry-say", entry, say),
-            new MockEdge("say-choice", say, choice),
-            new MockEdge("choice-line", choice, line, "Continue"),
-            new MockEdge("line-end", line, end),
+            new MockEdge("random-a", say, lineB, { empathyElse: true }),
+            new MockEdge("random-z", say, lineA, { empathyCondition: condition, empathyConditionOrder: 0 }),
+            new MockEdge("a-end", lineA, end), new MockEdge("b-end", lineB, end),
         ],
-    ));
-
-    assert.deepEqual(result.characters, ["Mara"]);
-    assert.deepEqual(result.lines, [
-        "The signal tower is still lit.",
-        "Rain erased the road behind the last train.",
-    ]);
-    assert.deepEqual(result.choices, ["Continue"]);
-    assert.deepEqual(result.entryPoints, [{ executionOffset: 0 }]);
-    assert.equal(result.bytecode.at(-1), EmpathyBytecodeOpcode.END);
-
-    const malformedSay = new MockNode(
-        "bad-say",
-        "Dialogue without a character.",
-        EmpathyCanvasNodeKind.SAY,
-        { empathyCharacter: "" },
-    );
-    assert.throws(
-        () => compileCanvas(canvas(
-            [entry, malformedSay, end],
-            [
-                new MockEdge("entry-bad", entry, malformedSay),
-                new MockEdge("bad-end", malformedSay, end),
-            ],
-        )),
-        /expected a non-empty character field and dialogue text/,
-    );
-
-    const nodeAfterEnd = new MockNode("after-end", "", EmpathyCanvasNodeKind.END);
-    assert.throws(
-        () => compileCanvas(canvas(
-            [entry, end, nodeAfterEnd],
-            [
-                new MockEdge("entry-end", entry, end),
-                new MockEdge("end-after", end, nodeAfterEnd),
-            ],
-        )),
-        /END node end must not have outgoing edges/,
-    );
+    ), variables);
+    const instructions = decode(result.bytecode);
+    const opcodes = instructions.map(({ opcode }) => opcode);
+    assert.ok(opcodes.includes(EmpathyBytecodeOpcode.LOAD));
+    assert.ok(opcodes.includes(EmpathyBytecodeOpcode.PUSH_F32));
+    assert.ok(opcodes.includes(EmpathyBytecodeOpcode.GREATER_EQUAL));
+    assert.ok(opcodes.includes(EmpathyBytecodeOpcode.JUMP_FALSE));
+    const load = instructions.find(({ opcode }) => opcode === EmpathyBytecodeOpcode.LOAD)!;
+    assert.equal(view(result.bytecode).getUint32(load.offset + 1, true), 1);
+    const boundaries = new Set(instructions.map(({ offset }) => offset));
+    for (const instruction of instructions.filter(({ opcode }) =>
+        opcode === EmpathyBytecodeOpcode.JUMP || opcode === EmpathyBytecodeOpcode.JUMP_FALSE)) {
+        assert.ok(boundaries.has(Number(view(result.bytecode).getBigUint64(instruction.offset + 1, true))));
+    }
 });
 
-test("converts canonical node kinds without folding character metadata into dialogue", () => {
-    const line = convertedEmpathyNodeData({
+test("rejects conditions that read write-only variables", () => {
+    const writeOnly: NarrativeVariable[] = [{ name: "world.secret", type: "boolean", access: "write" }];
+    const entry = node("entry", EmpathyCanvasNodeKind.ENTRY);
+    const line = node("line", EmpathyCanvasNodeKind.LINE, { text: "Line" });
+    const end = node("end", EmpathyCanvasNodeKind.END);
+    assert.throws(() => compileCanvas(graph(
+        [entry, line, end],
+        [
+            new MockEdge("a", entry, line),
+            new MockEdge("b", line, end, {
+                empathyCondition: { variable: "world.secret", comparison: "==", literal: "true" },
+                empathyConditionOrder: 0,
+            }),
+        ],
+    ), writeOnly), /write-only/);
+});
+
+test("rejects more than one else transition from the same node", () => {
+    const entry = node("entry", EmpathyCanvasNodeKind.ENTRY);
+    const line = node("line", EmpathyCanvasNodeKind.LINE, { text: "Line" });
+    const endA = node("end-a", EmpathyCanvasNodeKind.END);
+    const endB = node("end-b", EmpathyCanvasNodeKind.END);
+    assert.throws(() => compileCanvas(graph(
+        [entry, line, endA, endB],
+        [
+            new MockEdge("entry-line", entry, line),
+            new MockEdge("else-a", line, endA, { empathyElse: true }),
+            new MockEdge("else-b", line, endB, { empathyElse: true }),
+        ],
+    ), variables), /more than one else edge/);
+});
+
+test("rejects an evaluation order on an else transition", () => {
+    const entry = node("entry", EmpathyCanvasNodeKind.ENTRY);
+    const line = node("line", EmpathyCanvasNodeKind.LINE, { text: "Line" });
+    const endA = node("end-a", EmpathyCanvasNodeKind.END);
+    const endB = node("end-b", EmpathyCanvasNodeKind.END);
+    assert.throws(() => compileCanvas(graph(
+        [entry, line, endA, endB],
+        [
+            new MockEdge("entry-line", entry, line),
+            new MockEdge("condition", line, endA, {
+                empathyCondition: { variable: "world.radio_found", comparison: "==", literal: "true" },
+                empathyConditionOrder: 0,
+            }),
+            new MockEdge("else", line, endB, { empathyElse: true, empathyConditionOrder: 1 }),
+        ],
+    ), variables), /else edge cannot have an evaluation order/);
+});
+
+test("emits distinct predicate offsets and match values for two ENTRY nodes", () => {
+    const entryA = node("entry-a", EmpathyCanvasNodeKind.ENTRY, {
+        text: "radio",
+        empathyEntryCondition: { variable: "world.radio_found", comparison: "==", literal: "true" },
+        empathyEntryMatchValue: "10",
+    });
+    const entryB = node("entry-b", EmpathyCanvasNodeKind.ENTRY, {
+        text: "no radio",
+        empathyEntryCondition: { variable: "world.radio_found", comparison: "==", literal: "false" },
+        empathyEntryMatchValue: "20",
+    });
+    const endA = node("end-a", EmpathyCanvasNodeKind.END);
+    const endB = node("end-b", EmpathyCanvasNodeKind.END);
+    const result = compileCanvas(graph(
+        [entryA, entryB, endA, endB],
+        [new MockEdge("a", entryA, endA), new MockEdge("b", entryB, endB)],
+    ), variables);
+    assert.deepEqual(result.entryPoints.map(({ name }) => name), ["radio", "no radio"]);
+    assert.notEqual(result.entryPoints[0].predicateOffset, result.entryPoints[1].predicateOffset);
+    const instructions = decode(result.bytecode);
+    const boundaries = new Set(instructions.map(({ offset }) => offset));
+    for (const entryPoint of result.entryPoints) {
+        assert.ok(boundaries.has(entryPoint.executionOffset));
+        assert.ok(boundaries.has(entryPoint.predicateOffset!));
+        const startIndex = instructions.findIndex(({ offset }) => offset === entryPoint.predicateOffset);
+        assert.deepEqual(instructions.slice(startIndex, startIndex + 6).map(({ opcode }) => opcode), [
+            EmpathyBytecodeOpcode.LOAD, EmpathyBytecodeOpcode.PUSH_U8, EmpathyBytecodeOpcode.EQUAL,
+            EmpathyBytecodeOpcode.REJECT_FALSE, EmpathyBytecodeOpcode.PUSH_U32, EmpathyBytecodeOpcode.MATCH,
+        ]);
+    }
+    const data = view(result.bytecode);
+    const matches = instructions.filter(({ opcode }) => opcode === EmpathyBytecodeOpcode.PUSH_U32)
+        .map(({ offset }) => data.getUint32(offset + 1, true));
+    assert.deepEqual(matches, [10, 20]);
+});
+
+test("leaves ENTRY without a predicate out of matching", () => {
+    const result = compileCanvas(simpleEndGraph().canvas, variables);
+    assert.equal(result.entryPoints[0].predicateOffset, undefined);
+    assert.match(generateHeader(result, "story"), /\{0u, EMPATHY_PROGRAM_OFFSET_NONE\}/);
+});
+
+test("rejects an ENTRY without an explicit name", () => {
+    const entry = node("entry", EmpathyCanvasNodeKind.ENTRY, { text: "" });
+    const end = node("end", EmpathyCanvasNodeKind.END);
+    assert.throws(() => compileCanvas(graph(
+        [entry, end],
+        [new MockEdge("entry-end", entry, end)],
+    ), variables), /ENTRY requires a non-empty name/);
+});
+
+test("orders CHOICE options only by authored indices", () => {
+    const entry = node("entry", EmpathyCanvasNodeKind.ENTRY);
+    const choice = node("choice", EmpathyCanvasNodeKind.CHOICE, { empathyChoices: ["First", "Second"] });
+    const first = node("first", EmpathyCanvasNodeKind.END);
+    const second = node("second", EmpathyCanvasNodeKind.END);
+    const result = compileCanvas(graph(
+        [entry, choice, first, second],
+        [
+            new MockEdge("entry", entry, choice),
+            new MockEdge("aaa-id-but-second", choice, second, { label: "Ignored B", empathyChoiceIndex: 1 }),
+            new MockEdge("zzz-id-but-first", choice, first, { label: "Ignored A", empathyChoiceIndex: 0 }),
+        ],
+    ), variables);
+    assert.deepEqual(result.choices, ["First", "Second"]);
+});
+
+test("does not use author edge labels as CHOICE option text", () => {
+    const entry = node("entry", EmpathyCanvasNodeKind.ENTRY);
+    const choice = node("choice", EmpathyCanvasNodeKind.CHOICE);
+    const end = node("end", EmpathyCanvasNodeKind.END);
+    assert.throws(() => compileCanvas(graph(
+        [entry, choice, end],
+        [
+            new MockEdge("a", entry, choice),
+            new MockEdge("b", choice, end, { label: "Author note", empathyChoiceIndex: 0 }),
+        ],
+    ), variables), /must define at least one option/);
+});
+
+test("rejects missing and duplicate CHOICE edge links", () => {
+    const entry = node("entry", EmpathyCanvasNodeKind.ENTRY);
+    const choice = node("choice", EmpathyCanvasNodeKind.CHOICE, { empathyChoices: ["One", "Two"] });
+    const one = node("one", EmpathyCanvasNodeKind.END);
+    const two = node("two", EmpathyCanvasNodeKind.END);
+    const missing = graph(
+        [entry, choice, one, two],
+        [new MockEdge("a", entry, choice), new MockEdge("b", choice, one), new MockEdge("c", choice, two, { empathyChoiceIndex: 1 })],
+    );
+    assert.throws(() => compileCanvas(missing, variables), /not linked to an option/);
+    const duplicate = graph(
+        [entry, choice, one, two],
+        [
+            new MockEdge("a", entry, choice),
+            new MockEdge("b", choice, one, { empathyChoiceIndex: 0 }),
+            new MockEdge("c", choice, two, { empathyChoiceIndex: 0 }),
+        ],
+    );
+    assert.throws(() => compileCanvas(duplicate, variables), /linked more than once/);
+});
+
+test("rejects CHOICE edges that reference options outside the node set", () => {
+    const entry = node("entry", EmpathyCanvasNodeKind.ENTRY);
+    const choice = node("choice", EmpathyCanvasNodeKind.CHOICE, { empathyChoices: ["One", "Two"] });
+    const one = node("one", EmpathyCanvasNodeKind.END);
+    const two = node("two", EmpathyCanvasNodeKind.END);
+    assert.throws(() => compileCanvas(graph(
+        [entry, choice, one, two],
+        [
+            new MockEdge("a", entry, choice),
+            new MockEdge("b", choice, one, { empathyChoiceIndex: 0 }),
+            new MockEdge("c", choice, two, { empathyChoiceIndex: 2 }),
+        ],
+    ), variables), /references missing option 2/);
+});
+
+test("emits a converging target exactly once", () => {
+    const entry = node("entry", EmpathyCanvasNodeKind.ENTRY);
+    const line = node("line", EmpathyCanvasNodeKind.LINE, { text: "Branch" });
+    const end = node("end", EmpathyCanvasNodeKind.END);
+    const result = compileCanvas(graph(
+        [entry, line, end],
+        [
+            new MockEdge("a", entry, line),
+            new MockEdge("b", line, end, { empathyCondition: { variable: "world.radio_found", comparison: "==", literal: "true" }, empathyConditionOrder: 0 }),
+            new MockEdge("c", line, end, { empathyElse: true }),
+        ],
+    ), variables);
+    assert.equal(decode(result.bytecode).filter(({ opcode }) => opcode === EmpathyBytecodeOpcode.END).length, 1);
+    assert.equal(result.nodeOffsets.get("end") !== undefined, true);
+});
+
+test("generates multi-table host structs, constants, descriptors, and offsets", () => {
+    const result = compileCanvas(simpleEndGraph().canvas, variables);
+    const header = generateHeader(result, "radio story");
+    assert.match(header, /^#include <stddef\.h>$/m);
+    assert.match(header, /^#include <stdint\.h>$/m);
+    assert.match(header, /typedef struct WorldState[\s\S]*uint8_t radio_found;[\s\S]*float time;[\s\S]*} WorldState;/);
+    assert.match(header, /typedef struct NpcState[\s\S]*float trust;[\s\S]*} NpcState;/);
+    assert.match(header, /typedef struct QuestState[\s\S]*int32_t stage;[\s\S]*} QuestState;/);
+    assert.match(header, /RADIO_STORY_EMPATHY_PARAMETER_TABLE_WORLD = 0/);
+    assert.match(header, /RADIO_STORY_EMPATHY_PARAMETER_TABLE_NPC = 1/);
+    assert.match(header, /RADIO_STORY_EMPATHY_PARAMETER_TABLE_QUEST = 2/);
+    assert.match(header, /RADIO_STORY_EMPATHY_PARAMETER_WORLD_TIME = 2/);
+    assert.match(header, /offsetof\(WorldState, time\)/);
+    assert.match(header, /offsetof\(NpcState, trust\)/);
+    assert.match(header, /EMPATHY_VALUE_BASE_TYPE_FLOAT32/);
+    assert.match(header, /EMPATHY_PARAMETER_ACCESS_FLAGS_READ,/);
+    assert.match(header, /#define RADIO_STORY_EMPATHY_PARAMETER_TABLE_COUNT 3u/);
+    assert.match(header, /#define RADIO_STORY_EMPATHY_REQUIRED_PARAMETER_TABLE_COUNT 3u/);
+    assert.match(header, /4u, radio_story_empathy_parameters,/);
+});
+
+test("adds a new parameter table without compiler source changes", () => {
+    const expanded = [...variables, { name: "weather.raining", type: "boolean", access: "read" } as NarrativeVariable];
+    const result = compileCanvas(simpleEndGraph().canvas, expanded);
+    assert.deepEqual(result.tables.at(-1), { name: "weather", index: 3 });
+    assert.match(generateHeader(result, "story"), /STORY_EMPATHY_PARAMETER_TABLE_WEATHER = 3/);
+    assert.match(generateHeader(result, "story"), /typedef struct WeatherState/);
+});
+
+test("preserves deleted variable strings and reports them as missing", () => {
+    const entry = node("entry", EmpathyCanvasNodeKind.ENTRY);
+    const set = node("set", EmpathyCanvasNodeKind.SET, { empathyAssignments: [
+        { variable: "npc.trust", operation: "=", literal: "0.5" },
+    ] });
+    const end = node("end", EmpathyCanvasNodeKind.END);
+    const canvas = graph([entry, set, end], [new MockEdge("a", entry, set), new MockEdge("b", set, end)]);
+    const withoutTrust = variables.filter(({ name }) => name !== "npc.trust");
+    const issues = validateCanvas(canvas, withoutTrust);
+    assert.ok(issues.some(({ message }) => message.includes("npc.trust") && message.includes("missing")));
+    assert.throws(() => compileCanvas(canvas, withoutTrust), /npc\.trust.*missing/);
+    assert.equal(set.getData().empathyAssignments?.[0].variable, "npc.trust");
+});
+
+test("surfaces malformed variable configuration before emitting bytecode", () => {
+    const invalid: NarrativeVariable[] = [
+        { name: "world", type: "boolean", access: "read-write" },
+        { name: "world", type: "boolean", access: "read-write" },
+    ];
+    assert.throws(() => compileCanvas(simpleEndGraph().canvas, invalid), /table\.variable/);
+});
+
+test("converts nodes to SET metadata without retaining unrelated semantic fields", () => {
+    const converted = convertedEmpathyNodeData({
         type: "text",
-        text: "Hello from the tower.",
+        text: "",
         empathyKind: EmpathyCanvasNodeKind.SAY,
         empathyCharacter: "Mara",
-    }, EmpathyCanvasNodeKind.LINE);
-    assert.equal(line.text, "Hello from the tower.");
-    assert.equal(line.empathyKind, EmpathyCanvasNodeKind.LINE);
-    assert.equal(line.empathyCharacter, undefined);
-
-    const say = convertedEmpathyNodeData(line, EmpathyCanvasNodeKind.SAY);
-    assert.equal(say.text, "Hello from the tower.");
-    assert.equal(say.empathyCharacter, "Character");
-});
-
-test("rejects legacy text markers and combined SAY payloads", () => {
-    const markerEntry = new MockNode("marker-entry", "ENTRY");
-    const markerEnd = new MockNode("marker-end", "END");
-    assert.throws(
-        () => compileCanvas(canvas(
-            [markerEntry, markerEnd],
-            [new MockEdge("marker-edge", markerEntry, markerEnd)],
-        )),
-        /no ENTRY/,
-    );
-
-    const prefixedEntry = new MockNode("prefixed-entry", "", undefined, { type: "empathy-entry" });
-    assert.throws(() => compileCanvas(canvas([prefixedEntry], [])), /no ENTRY/);
-
-    const wrongTypeEntry = new MockNode(
-        "wrong-type-entry",
-        "",
-        EmpathyCanvasNodeKind.ENTRY,
-        { type: "empathy-entry" },
-    );
-    assert.throws(() => compileCanvas(canvas([wrongTypeEntry], [])), /no ENTRY/);
-
-    const entry = new MockNode("entry", "", EmpathyCanvasNodeKind.ENTRY);
-    const legacySay = new MockNode(
-        "legacy-say",
-        "Mara\nThis combined payload is not migrated.",
-        EmpathyCanvasNodeKind.SAY,
-    );
-    const end = new MockNode("end", "", EmpathyCanvasNodeKind.END);
-    assert.throws(
-        () => compileCanvas(canvas(
-            [entry, legacySay, end],
-            [
-                new MockEdge("entry-say", entry, legacySay),
-                new MockEdge("say-end", legacySay, end),
-            ],
-        )),
-        /expected a non-empty character field and dialogue text/,
-    );
-});
-
-test("compiles the bundled signal-tower demo Canvas", () => {
-    interface StoredNode extends CanvasNodeData {
-        id: string;
-        type: string;
-        text?: string;
-    }
-    interface StoredEdge {
-        id: string;
-        fromNode: string;
-        toNode: string;
-        label?: string;
-    }
-    interface StoredCanvas {
-        nodes: StoredNode[];
-        edges: StoredEdge[];
-    }
-
-    const stored = JSON.parse(readFileSync(
-        resolve(process.cwd(), "examples", "signal-tower-demo.canvas"),
-        "utf8",
-    )) as StoredCanvas;
-    const nodes = stored.nodes.map((data) => new MockNode(
-        data.id,
-        data.text ?? "",
-        data.empathyKind as EmpathyCanvasNodeKindValue | undefined,
-        data,
-    ));
-    const nodesById = new Map(nodes.map((node) => [node.id, node]));
-    const edges = stored.edges.map((data) => {
-        const from = nodesById.get(data.fromNode);
-        const to = nodesById.get(data.toNode);
-        assert.ok(from, `missing fixture edge source ${data.fromNode}`);
-        assert.ok(to, `missing fixture edge target ${data.toNode}`);
-        return new MockEdge(data.id, from, to, data.label);
-    });
-
-    const result = compileCanvas(canvas(nodes, edges));
-    assert.deepEqual(result.entryPoints, [{ executionOffset: 0 }]);
-    assert.deepEqual(result.characters, ["Мара", "Илья"]);
-    assert.deepEqual(result.choices, ["Подняться на крышу", "Ответить по радио"]);
-    assert.equal(result.lines.length, 6);
-    assert.equal(
-        decodedInstructions(result.bytecode)
-            .filter(({ opcode }) => opcode === EmpathyBytecodeOpcode.END)
-            .length,
-        2,
-    );
+        empathyEntryMatchValue: "12",
+    }, EmpathyCanvasNodeKind.SET);
+    assert.equal(converted.empathyKind, EmpathyCanvasNodeKind.SET);
+    assert.deepEqual(converted.empathyAssignments, [{ variable: "", operation: "=", literal: "" }]);
+    assert.equal(converted.empathyCharacter, undefined);
+    assert.equal(converted.empathyEntryMatchValue, undefined);
 });
