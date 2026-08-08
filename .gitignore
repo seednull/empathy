@@ -10,3 +10,4 @@
 # Obsidian plugin build outputs
 plugins/obsidian/node_modules/
 plugins/obsidian/main.js
+plugins/obsidian/compile.test.cjs

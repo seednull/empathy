@@ -7,7 +7,7 @@
     "scripts": {
         "build": "npm run typecheck && node esbuild.config.mjs",
         "typecheck": "tsc --noEmit",
-        "test": "esbuild src/compile.test.ts --bundle --platform=node --format=cjs --outfile=node_modules/.cache/empathy/compile.test.cjs && node --test node_modules/.cache/empathy/compile.test.cjs",
+        "test": "esbuild src/compile.test.ts --bundle --platform=node --format=cjs --outfile=build/compile.test.cjs && node --test build/compile.test.cjs",
         "verify": "npm test && npm run build"
     },
     "devDependencies": {
