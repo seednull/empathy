@@ -1043,11 +1043,12 @@ export function compileCanvas(canvas: Canvas, variables: readonly NarrativeVaria
     };
 }
 
-function cString(value: string): string {
+export function escapeCStringUtf8(value: string): string {
     let result = "\"";
     for (const byte of new TextEncoder().encode(value)) {
         if (byte === 92) result += "\\\\";
         else if (byte === 34) result += "\\\"";
+        else if (byte === 63) result += "\\077";
         else if (byte === 10) result += "\\n";
         else if (byte === 13) result += "\\r";
         else if (byte === 9) result += "\\t";
@@ -1091,7 +1092,7 @@ function stringTable(symbol: string, values: readonly string[]): string[] {
     return [
         `static const char *const ${symbol}[] =`,
         "{",
-        ...(values.length > 0 ? values.map((value) => `    ${cString(value)},`) : ["    0,"]),
+        ...(values.length > 0 ? values.map((value) => `    ${escapeCStringUtf8(value)},`) : ["    0,"]),
         "};",
     ];
 }
@@ -1101,7 +1102,7 @@ function authoredAtomTable(typeName: string, symbol: string, values: readonly Co
         `static const ${typeName} ${symbol}[] =`,
         "{",
         ...(values.length > 0
-            ? values.map((atom) => `    {${atom.value}u, ${atom.key === undefined ? "0" : cString(atom.key)}, ${cString(atom.text)}},`)
+            ? values.map((atom) => `    {${atom.value}u, ${atom.key === undefined ? "0" : escapeCStringUtf8(atom.key)}, ${escapeCStringUtf8(atom.text)}},`)
             : ["    {0u, 0, 0},"]),
         "};",
     ];

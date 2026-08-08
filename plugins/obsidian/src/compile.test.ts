@@ -25,6 +25,7 @@ import {
     collectCanvasAtoms,
     compileCanvas,
     EmpathyCanvasNodeKind,
+    escapeCStringUtf8,
     generateHeader,
     NarrativeAssignment,
     NarrativeCondition,
@@ -1049,6 +1050,50 @@ test("generates keyed and numeric-fallback constants without changing the CHOICE
     assert.match(removed, /RADIO_STORY_EMPATHY_LINE_1482 1482u/);
     assert.match(removed, /\{1482u, 0, "The tower is still transmitting\."\}/);
     assert.equal(entry.id, "entry");
+});
+
+test("escapes authored strings as exact UTF-8 bytes in C literals", () => {
+    const cases: ReadonlyArray<readonly [string, string, string]> = [
+        ["ASCII", "Hello world", '"Hello world"'],
+        ["Cyrillic", "Привет, Мара", '"\\320\\237\\321\\200\\320\\270\\320\\262\\320\\265\\321\\202, \\320\\234\\320\\260\\321\\200\\320\\260"'],
+        ["Japanese", "塔はまだ信号を送っている", '"\\345\\241\\224\\343\\201\\257\\343\\201\\276\\343\\201\\240\\344\\277\\241\\345\\217\\267\\343\\202\\222\\351\\200\\201\\343\\201\\243\\343\\201\\246\\343\\201\\204\\343\\202\\213"'],
+        ["Emoji", "The water is rising 🌊", '"The water is rising \\360\\237\\214\\212"'],
+        ["Quotes", 'She said "hello"', '"She said \\"hello\\""'],
+        ["C trigraph safety", "What??/next", '"What\\077\\077/next"'],
+        ["Backslash", "C:\\radio\\tower", '"C:\\\\radio\\\\tower"'],
+        ["Newline", "line one\nline two", '"line one\\nline two"'],
+        ["Carriage return", "line one\rline two", '"line one\\rline two"'],
+        ["Tab", "left\tright", '"left\\tright"'],
+    ];
+    for (const [label, value, expected] of cases) {
+        assert.equal(escapeCStringUtf8(value), expected, label);
+    }
+    assert.equal(escapeCStringUtf8("À7"), '"\\303\\2007"');
+    assert.doesNotMatch(escapeCStringUtf8("À7"), /\\x/i);
+});
+
+test("uses UTF-8 byte-safe literals for line, character, and choice header tables", () => {
+    const entry = node("entry", EmpathyCanvasNodeKind.ENTRY);
+    const say = node("say", EmpathyCanvasNodeKind.SAY, {
+        text: "Привет, Мара",
+        empathyCharacter: "塔はまだ信号を送っている",
+        empathyLineAtom: { value: 1482 },
+    });
+    const choiceNode = node("choice", EmpathyCanvasNodeKind.CHOICE, {
+        empathyChoices: [choice("The water is rising 🌊", undefined, 73)],
+    });
+    const end = node("end", EmpathyCanvasNodeKind.END);
+    const header = generateHeader(compileCanvas(graph(
+        [entry, say, choiceNode, end],
+        [
+            new MockEdge("entry-say", entry, say),
+            new MockEdge("say-choice", say, choiceNode),
+            new MockEdge("choice-end", choiceNode, end, { empathyChoiceAtom: 73 }),
+        ],
+    ), variables), "unicode");
+    assert.ok(header.includes(`{1482u, 0, ${escapeCStringUtf8("Привет, Мара")}}`));
+    assert.ok(header.includes(`    ${escapeCStringUtf8("塔はまだ信号を送っている")},`));
+    assert.ok(header.includes(`{73u, 0, ${escapeCStringUtf8("The water is rising 🌊")}}`));
 });
 
 test("validates optional IDs only when present and scopes uniqueness to atom type", () => {
