@@ -170,6 +170,22 @@ export class BytecodeWriter {
         this.data.push(...this.uint64Bytes(value));
     }
 
+    i32(value: number): void {
+        if (!Number.isInteger(value) || value < -0x80000000 || value > 0x7FFFFFFF) {
+            throw new Error(`Value is not an int32: ${value}`);
+        }
+        this.data.push(...this.unsignedBytes(value >>> 0, 0xFFFFFFFF, 4, "int32"));
+    }
+
+    f32(value: number): void {
+        if (!Number.isFinite(value) || !Number.isFinite(Math.fround(value))) {
+            throw new Error(`Value is not a finite float32: ${value}`);
+        }
+        const buffer = new ArrayBuffer(4);
+        new DataView(buffer).setFloat32(0, value, true);
+        this.data.push(...new Uint8Array(buffer));
+    }
+
     atom(type: number, value: number): void {
         const typeBytes = this.unsignedBytes(type, 0xFFFFFFFF, 4, "uint32");
         const valueBytes = this.unsignedBytes(value, 0xFFFFFFFF, 4, "uint32");
