@@ -134,8 +134,11 @@ export default class EmpathyPlugin extends Plugin {
         const candidate = view as InternalCanvasView | undefined;
         if (candidate?.getViewType() === "canvas") {
             this.lastCanvasView = candidate;
-            this.refreshPanels();
+        } else if (this.lastCanvasView) {
+            const live = this.app.workspace.getLeavesOfType("canvas").map((leaf) => leaf.view as InternalCanvasView);
+            if (!live.includes(this.lastCanvasView)) this.lastCanvasView = undefined;
         }
+        this.refreshPanels();
     }
 
     private createNode(canvas: Canvas, kind: EmpathyCanvasNodeKind): void {
