@@ -2,11 +2,13 @@ import { ItemView, Modal, Notice, setIcon, WorkspaceLeaf } from "obsidian";
 
 import {
     AtomSource,
+    isValidHeaderPrefix,
     NarrativeVariable,
     NarrativeVariableAccess,
     NarrativeVariableType,
     parseVariableName,
 } from "./compile";
+import { CanvasArtifactKind } from "./artifacts";
 
 export const EMPATHY_PANEL_VIEW = "empathy-panel";
 
@@ -25,7 +27,10 @@ interface EmpathyPanelHost {
     getVariables(): readonly NarrativeVariable[];
     setVariables(variables: readonly NarrativeVariable[]): Promise<void>;
     getUsageCount(name: string): number;
-    compileActiveCanvas(): Promise<void>;
+    getHeaderPrefix(): string;
+    setHeaderPrefix(prefix: string): Promise<void>;
+    getExporting(): CanvasArtifactKind | undefined;
+    exportActiveCanvas(kind: CanvasArtifactKind): Promise<void>;
     getAtomSources(): readonly AtomSource[];
     renameAtomKey(source: AtomSource, key: string): string | undefined;
     generateAtomKey(source: AtomSource): string | undefined;
@@ -36,7 +41,6 @@ interface EmpathyPanelHost {
 export class EmpathyPanelView extends ItemView {
     private selectCreated?: (variable: NarrativeVariable) => void;
     private creatingFor?: string | null;
-    private compiling = false;
     private atomQuery = "";
 
     constructor(leaf: WorkspaceLeaf, private readonly host: EmpathyPanelHost) {
@@ -64,6 +68,25 @@ export class EmpathyPanelView extends ItemView {
         if (this.containerEl.isConnected) this.render();
     }
 
+    refreshExportControls(): void {
+        if (!this.containerEl.isConnected) return;
+        const exporting = this.host.getExporting();
+        const prefixInput = this.contentEl.querySelector<HTMLInputElement>(".empathy-header-prefix");
+        if (prefixInput) prefixInput.disabled = exporting === "header";
+        this.contentEl.querySelectorAll<HTMLButtonElement>(".empathy-panel-export").forEach((button) => {
+            const kind = button.dataset.empathyArtifact as CanvasArtifactKind;
+            const label = button.dataset.empathyLabel!;
+            const invalidPrefix = kind === "header" && !isValidHeaderPrefix(prefixInput?.value);
+            button.disabled = exporting !== undefined || invalidPrefix;
+            button.title = invalidPrefix
+                ? "Set a valid header prefix first"
+                : `${label} from the active Canvas`;
+            button.querySelector<HTMLElement>("span:last-child")!.textContent = exporting === kind
+                ? "Generating…"
+                : label;
+        });
+    }
+
     startCreating(selectCreated?: (variable: NarrativeVariable) => void): void {
         this.selectCreated = selectCreated;
         this.creatingFor = this.host.getVariables().length > 0 ? null : undefined;
@@ -85,34 +108,109 @@ export class EmpathyPanelView extends ItemView {
         header.className = "empathy-panel-header";
         const title = document.createElement("h2");
         title.textContent = "Empathy";
-        const compile = document.createElement("button");
-        compile.type = "button";
-        compile.className = "mod-cta empathy-panel-compile";
-        const icon = document.createElement("span");
-        setIcon(icon, "code-2");
-        const text = document.createElement("span");
-        text.textContent = this.compiling ? "Compiling…" : "Compile active Canvas";
-        compile.disabled = this.compiling;
-        compile.append(icon, text);
-        compile.addEventListener("click", () => void this.compile(compile, text));
-        header.append(title, compile);
-        return header;
-    }
-
-    private async compile(button: HTMLButtonElement, text: HTMLElement): Promise<void> {
-        if (this.compiling) return;
-        this.compiling = true;
-        button.disabled = true;
-        text.textContent = "Compiling…";
-        try {
-            await this.host.compileActiveCanvas();
-        } finally {
-            this.compiling = false;
-            if (button.isConnected) {
-                button.disabled = false;
-                text.textContent = "Compile active Canvas";
+        const prefixField = document.createElement("label");
+        prefixField.className = "empathy-header-prefix-field";
+        const prefixLabel = document.createElement("span");
+        prefixLabel.textContent = "Header prefix";
+        const prefixInput = document.createElement("input");
+        prefixInput.type = "text";
+        prefixInput.className = "empathy-header-prefix";
+        prefixInput.value = this.host.getHeaderPrefix();
+        prefixInput.placeholder = "Canvas";
+        prefixInput.spellcheck = false;
+        prefixInput.setAttribute("aria-label", "Generated header prefix");
+        const prefixError = document.createElement("span");
+        prefixError.className = "empathy-header-prefix-error";
+        prefixError.setAttribute("aria-live", "polite");
+        const prefixValidationMessage = "Start with an ASCII letter; use letters, digits, and single internal underscores.";
+        const setPrefixError = (message?: string): void => {
+            prefixField.classList.toggle("is-invalid", Boolean(message));
+            prefixInput.toggleAttribute("aria-invalid", Boolean(message));
+            prefixInput.setCustomValidity(message ?? "");
+            prefixInput.title = message ?? "C identifier used for generated header symbols";
+            prefixError.textContent = message ?? "";
+            prefixError.hidden = message === undefined;
+        };
+        const commitPrefix = async (): Promise<boolean> => {
+            const prefix = prefixInput.value;
+            if (!isValidHeaderPrefix(prefix)) {
+                setPrefixError(prefixValidationMessage);
+                prefixInput.focus();
+                return false;
             }
+            setPrefixError();
+            if (prefix === this.host.getHeaderPrefix()) return true;
+            try {
+                await this.host.setHeaderPrefix(prefix);
+                return true;
+            } catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+                setPrefixError(message);
+                new Notice(`Could not save the header prefix: ${message}`);
+                return false;
+            }
+        };
+        prefixInput.addEventListener("input", () => {
+            setPrefixError(isValidHeaderPrefix(prefixInput.value) ? undefined : prefixValidationMessage);
+            this.refreshExportControls();
+        });
+        prefixInput.addEventListener("change", () => void commitPrefix());
+        prefixInput.addEventListener("keydown", (event) => {
+            if (event.key === "Enter") {
+                event.preventDefault();
+                prefixInput.blur();
+            } else if (event.key === "Escape") {
+                prefixInput.value = this.host.getHeaderPrefix();
+                setPrefixError();
+                this.refreshExportControls();
+                prefixInput.blur();
+            }
+        });
+        setPrefixError();
+        prefixField.append(prefixLabel, prefixInput, prefixError);
+        const exports = document.createElement("div");
+        exports.className = "empathy-panel-exports";
+        const exporting = this.host.getExporting();
+        const startExport = async (kind: CanvasArtifactKind): Promise<void> => {
+            const activeElement = document.activeElement;
+            if (activeElement?.classList.contains("empathy-atom-id")) {
+                const atomId = activeElement as HTMLInputElement;
+                atomId.blur();
+                if (!atomId.checkValidity()) {
+                    atomId.focus();
+                    return;
+                }
+            }
+            if (kind === "header") {
+                if (!await commitPrefix()) return;
+            } else if (isValidHeaderPrefix(prefixInput.value) && prefixInput.value !== this.host.getHeaderPrefix()) {
+                await commitPrefix();
+            }
+            if (this.host.getExporting() === undefined) await this.host.exportActiveCanvas(kind);
+        };
+        for (const { kind, label, icon } of [
+            { kind: "header", label: "Generate header", icon: "code-2" },
+            { kind: "bytecode", label: "Generate bytecode", icon: "binary" },
+        ] as const) {
+            const button = document.createElement("button");
+            button.type = "button";
+            button.className = "mod-cta empathy-panel-export";
+            button.dataset.empathyArtifact = kind;
+            button.dataset.empathyLabel = label;
+            const invalidPrefix = kind === "header" && !isValidHeaderPrefix(prefixInput.value);
+            button.disabled = exporting !== undefined || invalidPrefix;
+            button.title = invalidPrefix ? "Set a valid header prefix first" : `${label} from the active Canvas`;
+            const buttonIcon = document.createElement("span");
+            setIcon(buttonIcon, icon);
+            const text = document.createElement("span");
+            text.textContent = exporting === kind ? "Generating…" : label;
+            button.append(buttonIcon, text);
+            button.addEventListener("mousedown", (event) => event.preventDefault());
+            button.addEventListener("click", () => void startExport(kind));
+            exports.append(button);
         }
+        header.append(title, prefixField, exports);
+        return header;
     }
 
     private variablesSection(): HTMLElement {

@@ -560,7 +560,30 @@
     font-size: var(--font-ui-large);
 }
 
-.empathy-panel-compile,
+.empathy-header-prefix-field {
+    display: grid;
+    min-width: 0;
+    gap: 4px;
+    color: var(--text-muted);
+    font-size: var(--font-ui-smaller);
+}
+
+.empathy-header-prefix {
+    width: 100%;
+    min-width: 0;
+    font-family: var(--font-monospace);
+}
+
+.empathy-header-prefix-field.is-invalid .empathy-header-prefix {
+    border-color: var(--color-red);
+}
+
+.empathy-header-prefix-error {
+    color: var(--text-error);
+    line-height: 1.25;
+}
+
+.empathy-panel-export,
 .empathy-variable-table-add,
 .empathy-variable-new-table {
     display: flex;
@@ -570,11 +593,29 @@
     gap: 7px;
 }
 
-.empathy-panel-compile svg,
+.empathy-panel-export svg,
 .empathy-variable-table-add svg,
 .empathy-variable-new-table svg {
     width: 15px;
     height: 15px;
+}
+
+.empathy-panel-exports {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
+}
+
+.empathy-panel-export {
+    min-width: 0;
+    padding-inline: 8px;
+}
+
+.empathy-panel-export > span:last-child {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .empathy-panel-section-heading {

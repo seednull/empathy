@@ -4,7 +4,7 @@ import {
     Canvas,
     compileCanvas,
     EmpathyCanvasNodeKind,
-    generateHeader,
+    isValidHeaderPrefix,
     NarrativeVariable,
     NarrativeVariableAccess,
     NarrativeVariableType,
@@ -18,6 +18,12 @@ import {
     initialAtomAllocatorState,
     isValidAtomValue,
 } from "./atoms";
+import {
+    CanvasArtifactKind,
+    GeneratedFileSystem,
+    saveCanvasArtifact,
+    SystemSaveDialog,
+} from "./artifacts";
 import { EmpathyCanvasIntegration } from "./canvas";
 import {
     EMPATHY_PANEL_VIEW,
@@ -34,15 +40,28 @@ interface EmpathyPluginData {
     nextAtomValue: AtomAllocatorState;
 }
 
+interface DesktopWindow extends Window {
+    electron: { remote: { dialog: SystemSaveDialog } };
+    require(module: "fs"): { promises: GeneratedFileSystem };
+}
+
 export default class EmpathyPlugin extends Plugin {
     private canvasIntegration!: EmpathyCanvasIntegration;
-    private compiling = false;
+    private exporting?: CanvasArtifactKind;
+    private headerPrefix = "Canvas";
     private variables: NarrativeVariable[] = [];
     private nextAtomValue: AtomAllocatorState = { ...initialAtomAllocatorState };
     private lastCanvasView?: InternalCanvasView;
     private dataSave: Promise<void> = Promise.resolve();
 
     async onload(): Promise<void> {
+        const storedHeaderPrefix = this.app.loadLocalStorage(`${this.manifest.id}:header-prefix`);
+        if (storedHeaderPrefix !== null) {
+            if (!isValidHeaderPrefix(storedHeaderPrefix)) {
+                throw new Error("Empathy header prefix does not match the current schema");
+            }
+            this.headerPrefix = storedHeaderPrefix;
+        }
         const stored = await this.loadData() as unknown;
         if (stored !== null && stored !== undefined) {
             if (typeof stored !== "object" || Array.isArray(stored)) {
@@ -82,7 +101,10 @@ export default class EmpathyPlugin extends Plugin {
             getVariables: () => this.variables,
             setVariables: (variables) => this.setVariables(variables),
             getUsageCount: (name) => this.canvasIntegration.variableUsageCount(name),
-            compileActiveCanvas: () => this.compileActiveCanvas(),
+            getHeaderPrefix: () => this.headerPrefix,
+            setHeaderPrefix: (prefix) => this.setHeaderPrefix(prefix),
+            getExporting: () => this.exporting,
+            exportActiveCanvas: (kind) => this.exportActiveCanvas(kind),
             getAtomSources: () => withActiveCanvas([], (canvas) => this.canvasIntegration.atomSources(canvas)),
             renameAtomKey: (source, key) => withActiveCanvas(
                 "No active Canvas is available.",
@@ -124,11 +146,13 @@ export default class EmpathyPlugin extends Plugin {
             callback: () => void this.openPanel(),
         });
 
-        this.addCommand({
-            id: "compile-active-canvas",
-            name: "Compile active canvas",
-            callback: () => void this.compileActiveCanvas(),
-        });
+        for (const kind of ["header", "bytecode"] as const) {
+            this.addCommand({
+                id: `generate-active-canvas-${kind}`,
+                name: `Generate active Canvas ${kind}`,
+                callback: () => void this.exportActiveCanvas(kind),
+            });
+        }
 
         for (const kind of Object.values(EmpathyCanvasNodeKind)) {
             this.addCommand({
@@ -191,6 +215,20 @@ export default class EmpathyPlugin extends Plugin {
         this.refreshPanels();
     }
 
+    private setHeaderPrefix(prefix: string): Promise<void> {
+        if (!isValidHeaderPrefix(prefix)) throw new Error("invalid Empathy header prefix");
+        const previousPrefix = this.headerPrefix;
+        this.headerPrefix = prefix;
+        try {
+            this.app.saveLocalStorage(`${this.manifest.id}:header-prefix`, prefix);
+        } catch (error) {
+            this.headerPrefix = previousPrefix;
+            throw error;
+        }
+        this.refreshPanels();
+        return Promise.resolve();
+    }
+
     private persistData(): Promise<void> {
         const snapshot: EmpathyPluginData = {
             variables: [...this.variables],
@@ -221,6 +259,12 @@ export default class EmpathyPlugin extends Plugin {
         }
     }
 
+    private refreshExportControls(): void {
+        for (const leaf of this.app.workspace.getLeavesOfType(EMPATHY_PANEL_VIEW)) {
+            if (leaf.view instanceof EmpathyPanelView) leaf.view.refreshExportControls();
+        }
+    }
+
     private async openPanel(selectCreated?: (variable: NarrativeVariable) => void): Promise<void> {
         const leaf = await this.app.workspace.ensureSideLeaf(EMPATHY_PANEL_VIEW, "right", {
             active: true,
@@ -229,13 +273,14 @@ export default class EmpathyPlugin extends Plugin {
         if (leaf.view instanceof EmpathyPanelView && selectCreated) leaf.view.startCreating(selectCreated);
     }
 
-    private async compileActiveCanvas(): Promise<void> {
-        if (this.compiling) {
-            new Notice("Empathy compile is already in progress");
+    private async exportActiveCanvas(kind: CanvasArtifactKind): Promise<void> {
+        if (this.exporting !== undefined) {
+            new Notice("Empathy export is already in progress");
             return;
         }
 
-        this.compiling = true;
+        this.exporting = kind;
+        this.refreshExportControls();
         try {
             const view = this.activeCanvasView();
             if (!view) {
@@ -248,21 +293,23 @@ export default class EmpathyPlugin extends Plugin {
             }
 
             const result = compileCanvas(view.canvas, this.variables);
-            const outputBase = file.path.slice(0, -(file.extension.length + 1));
-            const binaryPath = `${outputBase}.empathy.bin`;
-            const headerPath = `${outputBase}.empathy.h`;
-            const binary = new Uint8Array(result.bytecode).buffer;
-            const header = generateHeader(result, file.basename);
-
-            await this.app.vault.adapter.writeBinary(binaryPath, binary);
-            await this.app.vault.adapter.write(headerPath, header);
-            new Notice(`Empathy: compiled ${file.name} to ${binaryPath} and ${headerPath}`);
+            const desktop = window as unknown as DesktopWindow;
+            const outputPath = await saveCanvasArtifact(
+                desktop.electron.remote.dialog,
+                desktop.require("fs").promises,
+                result,
+                kind === "header"
+                    ? { kind, headerPrefix: this.headerPrefix }
+                    : { kind, canvasName: file.basename },
+            );
+            if (outputPath) new Notice(`Empathy: saved ${kind} to ${outputPath}`);
         } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
-            console.error("Empathy Canvas compile failed", error);
-            new Notice(`Empathy compile failed: ${message}`);
+            console.error(`Empathy Canvas ${kind} export failed`, error);
+            new Notice(`Empathy ${kind} export failed: ${message}`);
         } finally {
-            this.compiling = false;
+            this.exporting = undefined;
+            this.refreshExportControls();
         }
     }
 }

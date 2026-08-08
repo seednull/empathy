@@ -1082,14 +1082,8 @@ export function escapeCStringUtf8(value: string): string {
     return result + "\"";
 }
 
-function generatedPrefix(sourceName: string): string {
-    let prefix = sourceName
-        .replace(/[^A-Za-z0-9_]+/g, "_")
-        .replace(/_+/g, "_")
-        .replace(/^_+|_+$/g, "");
-    if (prefix.length === 0) prefix = "Canvas";
-    if (/^[0-9]/.test(prefix)) prefix = `Canvas_${prefix}`;
-    return prefix;
+export function isValidHeaderPrefix(value: unknown): value is string {
+    return typeof value === "string" && /^[A-Za-z][A-Za-z0-9]*(?:_[A-Za-z0-9]+)*$/.test(value);
 }
 
 const cKeywords = new Set(["auto", "break", "case", "char", "const", "continue", "default", "do", "double", "else", "enum", "extern", "float", "for", "goto", "if", "inline", "int", "long", "register", "restrict", "return", "short", "signed", "sizeof", "static", "struct", "switch", "typedef", "union", "unsigned", "void", "volatile", "while"]);
@@ -1174,8 +1168,10 @@ function authoredAtomConstants(
     ]));
 }
 
-export function generateHeader(result: CompileResult, sourceName: string): string {
-    const prefix = generatedPrefix(sourceName);
+export function generateHeader(result: CompileResult, prefix: string): string {
+    if (!isValidHeaderPrefix(prefix)) {
+        throw new Error("header prefix must start with an ASCII letter and contain only letters, digits, and single internal underscores");
+    }
     const uppercasePrefix = prefix.toUpperCase();
     const variablePrefix = prefix.toLowerCase();
     const lineRange = authoredAtomRange(result.lines);

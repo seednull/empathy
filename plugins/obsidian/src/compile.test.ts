@@ -3,6 +3,10 @@ import { test } from "node:test";
 
 import { EmpathyBytecodeInstructionSize, EmpathyBytecodeOpcode } from "./bytecode";
 import {
+    saveCanvasArtifact,
+    SystemSaveDialogOptions,
+} from "./artifacts";
+import {
     convertedEmpathyNodeData,
     EmpathyCanvasIntegration,
     formatChoiceBadge,
@@ -28,6 +32,7 @@ import {
     EmpathyCanvasNodeKind,
     escapeCStringUtf8,
     generateHeader,
+    isValidHeaderPrefix,
     NarrativeAssignment,
     NarrativeCondition,
     NarrativeChoice,
@@ -359,6 +364,153 @@ function setGraph(assignments: NarrativeAssignment[]): Canvas {
     const end = node("end", EmpathyCanvasNodeKind.END);
     return graph([entry, set, end], [new MockEdge("entry-set", entry, set), new MockEdge("set-end", set, end)]);
 }
+
+test("saves header and bytecode independently through native file dialogs", async () => {
+    const result = compileCanvas(simpleEndGraph().canvas, variables);
+    const dialogOptions: SystemSaveDialogOptions[] = [];
+    const selectedPaths = ["D:\\exports\\Chosen.h", "E:\\build\\Radio Story.empathy.bin"];
+    const writes: Array<{ filePath: string; data: string | Uint8Array; encoding?: "utf8" }> = [];
+    const dialog = {
+        showSaveDialog: async (options: SystemSaveDialogOptions) => {
+            dialogOptions.push(options);
+            return { canceled: false, filePath: selectedPaths[dialogOptions.length - 1] };
+        },
+    };
+    const fileSystem = {
+        writeFile: async (filePath: string, data: string | Uint8Array, encoding?: "utf8") => {
+            writes.push({ filePath, data, encoding });
+        },
+    };
+
+    assert.equal(await saveCanvasArtifact(
+        dialog,
+        fileSystem,
+        result,
+        { kind: "header", headerPrefix: "Game_Api" },
+    ), selectedPaths[0]);
+    assert.equal(await saveCanvasArtifact(
+        dialog,
+        fileSystem,
+        result,
+        { kind: "bytecode", canvasName: "Radio Story" },
+    ), selectedPaths[1]);
+    assert.deepEqual(dialogOptions, [
+        {
+            title: "Save Empathy header",
+            defaultPath: "Game_Api.empathy.h",
+            filters: [
+                { name: "C/C++ header", extensions: ["h"] },
+                { name: "All Files", extensions: ["*"] },
+            ],
+            properties: ["showOverwriteConfirmation"],
+        },
+        {
+            title: "Save Empathy bytecode",
+            defaultPath: "Radio Story.empathy.bin",
+            filters: [
+                { name: "Empathy bytecode", extensions: ["bin"] },
+                { name: "All Files", extensions: ["*"] },
+            ],
+            properties: ["showOverwriteConfirmation"],
+        },
+    ]);
+    assert.equal(writes.length, 2);
+    assert.deepEqual(writes[0], {
+        filePath: selectedPaths[0],
+        data: generateHeader(result, "Game_Api"),
+        encoding: "utf8",
+    });
+    assert.match(writes[0].data as string, /typedef enum Game_Api_AtomType_t/);
+    assert.match(writes[0].data as string, /#define GAME_API_LINE_COUNT/);
+    assert.match(writes[0].data as string, /\bgame_api_line_atoms\b/);
+    assert.doesNotMatch(writes[0].data as string, /Radio_Story/);
+    assert.equal(writes[1].filePath, selectedPaths[1]);
+    assert.deepEqual(writes[1].data, result.bytecode);
+    assert.equal(writes[1].encoding, undefined);
+});
+
+test("does not write an artifact when its native save dialog is canceled", async () => {
+    const result = compileCanvas(simpleEndGraph().canvas, variables);
+    const replies = [
+        { canceled: true, filePath: "D:\\ignored.empathy.h" },
+        { canceled: false },
+    ];
+    let dialogCount = 0;
+    let writeCount = 0;
+    const dialog = {
+        showSaveDialog: async (_options: SystemSaveDialogOptions) => replies[dialogCount++],
+    };
+    const fileSystem = {
+        writeFile: async (_filePath: string, _data: string | Uint8Array, _encoding?: "utf8") => {
+            ++writeCount;
+        },
+    };
+
+    for (const request of [
+        { kind: "header", headerPrefix: "Story" },
+        { kind: "bytecode", canvasName: "story" },
+    ] as const) {
+        assert.equal(await saveCanvasArtifact(dialog, fileSystem, result, request), undefined);
+    }
+    assert.equal(dialogCount, 2);
+    assert.equal(writeCount, 0);
+});
+
+test("propagates native dialog and file write failures", async () => {
+    const result = compileCanvas(simpleEndGraph().canvas, variables);
+    let writeCount = 0;
+    await assert.rejects(saveCanvasArtifact({
+        showSaveDialog: async (_options: SystemSaveDialogOptions) => { throw new Error("dialog failed"); },
+    }, {
+        writeFile: async (_filePath: string, _data: string | Uint8Array, _encoding?: "utf8") => {
+            ++writeCount;
+        },
+    }, result, { kind: "header", headerPrefix: "Story" }), /dialog failed/);
+    assert.equal(writeCount, 0);
+
+    await assert.rejects(saveCanvasArtifact({
+        showSaveDialog: async (_options: SystemSaveDialogOptions) => ({
+            canceled: false,
+            filePath: "D:\\story.empathy.bin",
+        }),
+    }, {
+        writeFile: async (_filePath: string, _data: string | Uint8Array, _encoding?: "utf8") => {
+            throw new Error("write failed");
+        },
+    }, result, { kind: "bytecode", canvasName: "story" }), /write failed/);
+});
+
+test("validates exact manual header prefixes before opening a save dialog", async () => {
+    for (const valid of ["Canvas", "Game_Api", "x", "X9", "RaDiO_2", "R".repeat(128)]) {
+        assert.equal(isValidHeaderPrefix(valid), true, valid);
+    }
+    for (const invalid of [
+        "",
+        " Radio",
+        "Radio Story",
+        "9Radio",
+        "_Radio",
+        "Radio_",
+        "Radio__Story",
+        "Радио",
+    ]) {
+        assert.equal(isValidHeaderPrefix(invalid), false, invalid);
+    }
+
+    const result = compileCanvas(simpleEndGraph().canvas, variables);
+    let dialogCount = 0;
+    await assert.rejects(saveCanvasArtifact({
+        showSaveDialog: async (_options: SystemSaveDialogOptions) => {
+            ++dialogCount;
+            return { canceled: true };
+        },
+    }, {
+        writeFile: async (_filePath: string, _data: string | Uint8Array, _encoding?: "utf8") => undefined,
+    }, result, { kind: "header", headerPrefix: "Radio Story" }), /header prefix/);
+    assert.equal(dialogCount, 0);
+    assert.throws(() => generateHeader(result, "Radio Story"), /header prefix/);
+    assert.match(generateHeader(result, "RaDiO_2"), /typedef enum RaDiO_2_AtomType_t/);
+});
 
 test("parses exactly one qualified-name separator", () => {
     assert.deepEqual(parseVariableName("world.time"), { tableName: "world", variableName: "time" });
@@ -1037,7 +1189,7 @@ test("validates, compiles, and generates numeric enum members for unassigned ato
         key: undefined,
         text: "The tower is still transmitting.",
     }]);
-    const header = generateHeader(result, "Radio Story");
+    const header = generateHeader(result, "Radio_Story");
     assert.match(header, /typedef enum Radio_Story_LineAtom_t[\s\S]*RADIO_STORY_LINE_1482 = 1482u,[\s\S]*} Radio_Story_LineAtom;/);
     assert.doesNotMatch(header, /^#define (?:RADIO_STORY|Radio_Story)_LINE_1482/m);
     assert.match(header, /\{RADIO_STORY_LINE_1482, 0, "The tower is still transmitting\."\}/);
@@ -1166,7 +1318,7 @@ test("generates keyed and numeric-fallback atom enums without changing the CHOIC
     originalEntryEdge.to.node = line;
     fixture.canvas.edges.set("line-choice", new MockEdge("line-choice", line, fixture.choiceNode));
     const result = compileCanvas(fixture.canvas, variables);
-    const header = generateHeader(result, "Radio Story");
+    const header = generateHeader(result, "Radio_Story");
     assert.match(header, /RADIO_STORY_LINE_DLG_RADIO_INTRO_00 = 1482u/);
     assert.match(header, /RADIO_STORY_CHOICE_CHOICE_RADIO_ASK = 91u/);
     assert.match(header, /RADIO_STORY_CHOICE_73 = 73u/);
@@ -1177,15 +1329,15 @@ test("generates keyed and numeric-fallback atom enums without changing the CHOIC
     assert.doesNotMatch(header, /_EMPATHY/);
     assert.doesNotMatch(header, /^#define RADIO_STORY_(?:LINE|CHARACTER|CHOICE)_(?!COUNT)/m);
     line.setData({ ...line.getData(), empathyLineAtom: { value: 1482, key: "for" } });
-    const keyword = generateHeader(compileCanvas(fixture.canvas, variables), "Radio Story");
+    const keyword = generateHeader(compileCanvas(fixture.canvas, variables), "Radio_Story");
     assert.match(keyword, /RADIO_STORY_LINE_FOR = 1482u/);
     assert.doesNotMatch(keyword, /LINE__FOR/);
     line.setData({ ...line.getData(), empathyLineAtom: { value: 1482, key: "dlg_radio_intro_01" } });
-    const renamed = generateHeader(compileCanvas(fixture.canvas, variables), "Radio Story");
+    const renamed = generateHeader(compileCanvas(fixture.canvas, variables), "Radio_Story");
     assert.match(renamed, /RADIO_STORY_LINE_DLG_RADIO_INTRO_01 = 1482u/);
     assert.doesNotMatch(renamed, /DLG_RADIO_INTRO_00/);
     line.setData({ ...line.getData(), empathyLineAtom: { value: 1482 } });
-    const removed = generateHeader(compileCanvas(fixture.canvas, variables), "Radio Story");
+    const removed = generateHeader(compileCanvas(fixture.canvas, variables), "Radio_Story");
     assert.match(removed, /RADIO_STORY_LINE_1482 = 1482u/);
     assert.match(removed, /\{RADIO_STORY_LINE_1482, 0, "The tower is still transmitting\."\}/);
     assert.equal(entry.id, "entry");
@@ -1486,7 +1638,7 @@ test("rejects duplicate transmitters for the same portal", () => {
 
 test("orders case-preserving header sections and emits only the Empathy include", () => {
     const result = compileCanvas(simpleEndGraph().canvas, variables);
-    const header = generateHeader(result, "Radio Story");
+    const header = generateHeader(result, "Radio_Story");
     assert.deepEqual(header.match(/^#include .+$/gm), ["#include <empathy.h>"]);
     assert.doesNotMatch(header, /\bstddef\b/);
     assert.doesNotMatch(header, /_EMPATHY/);

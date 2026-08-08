@@ -189,7 +189,8 @@ the generator instead of editing those regions directly. The bytecode fields in
 ## Obsidian Canvas proof of concept
 
 The deliberately small plugin under `plugins/obsidian/` compiles the active Canvas runtime graph
-directly to an Empathy bytecode payload and a companion C/C++ header next to the `.canvas` file.
+into an Empathy bytecode payload and a companion C/C++ data header. Each artifact is generated and
+saved independently through the native system file dialog.
 
 ### Pinned POC environment
 
@@ -226,9 +227,10 @@ repository root; normal plugin builds do not require Python. Copy `plugins/obsid
 With a Canvas open, use the colored Empathy buttons in its bottom card toolbar to add an **ENTRY**,
 **SAY**, **LINE**, **CHOICE**, **SET**, **RECEIVER**, **TRANSMITTER**, or **END** at the viewport
 center. Receiver and transmitter have separate buttons and directional icons. The Empathy ribbon icon or
-**Open Empathy panel** command opens the plugin's main right sidebar. It contains an action that
-compiles the most recently active Canvas, the narrative-variable editor, and an Atoms browser. Each
-variable is edited in one compact name/type/access/delete row. Destructive
+**Open Empathy panel** command opens the plugin's main right sidebar. It contains separate actions
+that generate the most recently active Canvas header or bytecode, an explicit persisted header-prefix
+field, the narrative-variable editor, and an Atoms browser. Each variable is edited in one compact
+name/type/access/delete row. Destructive
 icon buttons use a confirmation dialog that also reports outstanding references. Variables persist
 in plugin data using only a qualified name, author-facing type, and access mode. A qualified name has
 exactly one dot:
@@ -349,14 +351,21 @@ the host nor bytecode remaps a visible index to an authored index. Unknown, wron
 and currently hidden responses cannot enter a valid branch. If every option is hidden, execution
 ends without producing an empty CHOICE yield.
 
-Compilation performs lightweight structural and type validation before writing either artifact.
-Invalid nodes and edges receive Canvas styling/tooltips, and the compile Notice reports the first
-error plus a remaining count. The generated header includes only `<empathy.h>` and does not add
-standard-library header dependencies. The Canvas basename becomes one case-preserving C identifier
-prefix for type names; invalid identifier runs become underscores and no extra `_EMPATHY` segment is
-added. Macro names and enum values use the uppercase form of that prefix, while generated variable
-names use its lowercase form. Count, version, and size values remain defines. LINE, CHARACTER, and
-CHOICE atom values are enum members, using an authored ID when present and a numeric fallback otherwise.
+Each generation action performs lightweight structural and type validation before opening its
+native save dialog, which retains the system's last selected directory. Cancellation does not write
+anything. Invalid nodes and edges receive Canvas styling/tooltips, and the export Notice reports the
+first error plus a remaining count. The generated header includes only `<empathy.h>` and does not add
+standard-library header dependencies.
+
+The sidebar's **Header prefix** is the sole source of both the C symbol prefix and the native dialog's
+suggested `<prefix>.empathy.h` filename; neither depends on the active Canvas name. It is stored in
+Obsidian's vault-local storage, preserves its exact case, starts with an ASCII letter, and otherwise accepts letters,
+digits, and single internal underscores. A fresh plugin starts with `Canvas` until the field is edited. Macro
+names and enum values use its uppercase form, generated variable names use its lowercase form, and
+type names keep its original case. Bytecode export ignores this
+setting and suggests `<Canvas name>.empathy.bin`. Count, version, and size values remain defines. LINE,
+CHARACTER, and CHOICE atom values are enum members, using an authored ID when present and a numeric
+fallback otherwise.
 
 Header sections are emitted as pragma/include, defines, enums and supporting structs, atom text
 arrays, then descriptor arrays. An atom text's optional ID pointer is null when unassigned. Authored
