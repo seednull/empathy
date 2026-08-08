@@ -192,10 +192,6 @@ export class BytecodeWriter {
         this.data.push(...typeBytes, ...valueBytes);
     }
 
-    opcode(value: number): void {
-        this.u8(value);
-    }
-
     patchU64(offset: number, value: number | bigint): void {
         if (!Number.isInteger(offset) || offset < 0 || offset + 8 > this.data.length) {
             throw new Error(`Invalid uint64 patch offset: ${offset}`);

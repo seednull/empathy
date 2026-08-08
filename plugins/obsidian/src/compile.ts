@@ -799,7 +799,7 @@ function queueTarget(state: CompileState, edge: CanvasEdge, source: CanvasNode):
 }
 
 function emitJump(state: CompileState, target: CanvasNode): void {
-    state.writer.opcode(EmpathyBytecodeOpcode.JUMP);
+    state.writer.u8(EmpathyBytecodeOpcode.JUMP);
     const operandOffset = state.writer.offset;
     state.writer.u64(0n);
     state.patches.push({ operandOffset, targetNodeId: nodeId(target) });
@@ -808,20 +808,20 @@ function emitJump(state: CompileState, target: CanvasNode): void {
 function emitLiteral(writer: BytecodeWriter, variable: NarrativeVariable, literal: string): void {
     const value = parsedLiteral(variable, literal)!;
     if (variable.type === NarrativeVariableType.BOOLEAN) {
-        writer.opcode(EmpathyBytecodeOpcode.PUSH_U8);
+        writer.u8(EmpathyBytecodeOpcode.PUSH_U8);
         writer.u8(value ? 1 : 0);
     } else if (variable.type === NarrativeVariableType.INTEGER) {
-        writer.opcode(EmpathyBytecodeOpcode.PUSH_I32);
+        writer.u8(EmpathyBytecodeOpcode.PUSH_I32);
         writer.i32(value as number);
     } else {
-        writer.opcode(EmpathyBytecodeOpcode.PUSH_F32);
+        writer.u8(EmpathyBytecodeOpcode.PUSH_F32);
         writer.f32(value as number);
     }
 }
 
 function emitCondition(state: CompileState, condition: NarrativeCondition): void {
     const parameter = state.parameters.get(condition.variable)!;
-    state.writer.opcode(EmpathyBytecodeOpcode.LOAD);
+    state.writer.u8(EmpathyBytecodeOpcode.LOAD);
     state.writer.u32(parameter.parameterIndex);
     emitLiteral(state.writer, parameter, condition.literal);
     const opcodes: Record<NarrativeComparison, number> = {
@@ -832,7 +832,7 @@ function emitCondition(state: CompileState, condition: NarrativeCondition): void
         ">": EmpathyBytecodeOpcode.GREATER,
         ">=": EmpathyBytecodeOpcode.GREATER_EQUAL,
     };
-    state.writer.opcode(opcodes[condition.comparison]);
+    state.writer.u8(opcodes[condition.comparison]);
 }
 
 function emitTransitions(state: CompileState, node: CanvasNode): void {
@@ -855,13 +855,13 @@ function emitTransitions(state: CompileState, node: CanvasNode): void {
             return;
         }
         emitCondition(state, data.empathyCondition!);
-        state.writer.opcode(EmpathyBytecodeOpcode.JUMP_FALSE);
+        state.writer.u8(EmpathyBytecodeOpcode.JUMP_FALSE);
         const nextOffset = state.writer.offset;
         state.writer.u64(0n);
         emitJump(state, target);
         state.writer.patchU64(nextOffset, state.writer.offset);
     }
-    state.writer.opcode(EmpathyBytecodeOpcode.END);
+    state.writer.u8(EmpathyBytecodeOpcode.END);
 }
 
 function compileSay(state: CompileState, node: CanvasNode): void {
@@ -871,11 +871,11 @@ function compileSay(state: CompileState, node: CanvasNode): void {
     const lineAtom = data.empathyLineAtom!;
     registerAuthoredAtom(lineAtom, line, state.lines, state.lineValues);
     const characterId = internCharacter(character, state.characters, state.characterIds);
-    state.writer.opcode(EmpathyBytecodeOpcode.YIELD_PUSH_ATOM);
+    state.writer.u8(EmpathyBytecodeOpcode.YIELD_PUSH_ATOM);
     state.writer.atom(EmpathyPocAtomType.LINE, lineAtom.value);
-    state.writer.opcode(EmpathyBytecodeOpcode.YIELD_PUSH_ATOM);
+    state.writer.u8(EmpathyBytecodeOpcode.YIELD_PUSH_ATOM);
     state.writer.atom(EmpathyPocAtomType.CHARACTER, characterId);
-    state.writer.opcode(EmpathyBytecodeOpcode.YIELD);
+    state.writer.u8(EmpathyBytecodeOpcode.YIELD);
     state.writer.u32(EmpathyPocYieldType.SAY);
     emitTransitions(state, node);
 }
@@ -884,9 +884,9 @@ function compileLine(state: CompileState, node: CanvasNode): void {
     const line = normalizedNodeText(node);
     const lineAtom = node.getData().empathyLineAtom!;
     registerAuthoredAtom(lineAtom, line, state.lines, state.lineValues);
-    state.writer.opcode(EmpathyBytecodeOpcode.YIELD_PUSH_ATOM);
+    state.writer.u8(EmpathyBytecodeOpcode.YIELD_PUSH_ATOM);
     state.writer.atom(EmpathyPocAtomType.LINE, lineAtom.value);
-    state.writer.opcode(EmpathyBytecodeOpcode.YIELD);
+    state.writer.u8(EmpathyBytecodeOpcode.YIELD);
     state.writer.u32(EmpathyPocYieldType.LINE);
     emitTransitions(state, node);
 }
@@ -895,13 +895,13 @@ function compileSet(state: CompileState, node: CanvasNode): void {
     for (const assignment of node.getData().empathyAssignments!) {
         const parameter = state.parameters.get(assignment.variable)!;
         if (assignment.operation !== "=") {
-            state.writer.opcode(EmpathyBytecodeOpcode.LOAD);
+            state.writer.u8(EmpathyBytecodeOpcode.LOAD);
             state.writer.u32(parameter.parameterIndex);
         }
         emitLiteral(state.writer, parameter, assignment.literal);
-        if (assignment.operation === "+=") state.writer.opcode(EmpathyBytecodeOpcode.ADD);
-        else if (assignment.operation === "-=") state.writer.opcode(EmpathyBytecodeOpcode.SUB);
-        state.writer.opcode(EmpathyBytecodeOpcode.STORE);
+        if (assignment.operation === "+=") state.writer.u8(EmpathyBytecodeOpcode.ADD);
+        else if (assignment.operation === "-=") state.writer.u8(EmpathyBytecodeOpcode.SUB);
+        state.writer.u8(EmpathyBytecodeOpcode.STORE);
         state.writer.u32(parameter.parameterIndex);
     }
     const edge = outgoingEdges(state.canvas, node)[0];
@@ -912,61 +912,61 @@ function compileChoice(state: CompileState, node: CanvasNode): void {
     const choices = node.getData().empathyChoices!;
     const edgesByAtom = new Map(outgoingEdges(state.canvas, node).map((edge) => [edge.getData().empathyChoiceAtom!, edge]));
     const targets = new Map<number, CanvasNode>();
-    state.writer.opcode(EmpathyBytecodeOpcode.PUSH_U32);
+    state.writer.u8(EmpathyBytecodeOpcode.PUSH_U32);
     state.writer.u32(0);
     for (const choice of choices) {
         registerAuthoredAtom(choice.atom, choice.text.trim(), state.choices, state.choiceValues);
         let skipOffset: number | undefined;
         if (choice.condition) {
             emitCondition(state, choice.condition);
-            state.writer.opcode(EmpathyBytecodeOpcode.JUMP_FALSE);
+            state.writer.u8(EmpathyBytecodeOpcode.JUMP_FALSE);
             skipOffset = state.writer.offset;
             state.writer.u64(0n);
         }
-        state.writer.opcode(EmpathyBytecodeOpcode.YIELD_PUSH_ATOM);
+        state.writer.u8(EmpathyBytecodeOpcode.YIELD_PUSH_ATOM);
         state.writer.atom(EmpathyPocAtomType.CHOICE, choice.atom.value);
-        state.writer.opcode(EmpathyBytecodeOpcode.PUSH_U32);
+        state.writer.u8(EmpathyBytecodeOpcode.PUSH_U32);
         state.writer.u32(1);
-        state.writer.opcode(EmpathyBytecodeOpcode.ADD);
+        state.writer.u8(EmpathyBytecodeOpcode.ADD);
         if (skipOffset !== undefined) state.writer.patchU64(skipOffset, state.writer.offset);
         targets.set(choice.atom.value, queueTarget(state, edgesByAtom.get(choice.atom.value)!, node));
     }
-    state.writer.opcode(EmpathyBytecodeOpcode.DUP);
-    state.writer.opcode(EmpathyBytecodeOpcode.PUSH_U32);
+    state.writer.u8(EmpathyBytecodeOpcode.DUP);
+    state.writer.u8(EmpathyBytecodeOpcode.PUSH_U32);
     state.writer.u32(0);
-    state.writer.opcode(EmpathyBytecodeOpcode.EQUAL);
-    state.writer.opcode(EmpathyBytecodeOpcode.JUMP_FALSE);
+    state.writer.u8(EmpathyBytecodeOpcode.EQUAL);
+    state.writer.u8(EmpathyBytecodeOpcode.JUMP_FALSE);
     const hasOptionsOffset = state.writer.offset;
     state.writer.u64(0n);
-    state.writer.opcode(EmpathyBytecodeOpcode.DROP);
-    state.writer.opcode(EmpathyBytecodeOpcode.END);
+    state.writer.u8(EmpathyBytecodeOpcode.DROP);
+    state.writer.u8(EmpathyBytecodeOpcode.END);
     state.writer.patchU64(hasOptionsOffset, state.writer.offset);
-    state.writer.opcode(EmpathyBytecodeOpcode.DROP);
-    state.writer.opcode(EmpathyBytecodeOpcode.YIELD);
+    state.writer.u8(EmpathyBytecodeOpcode.DROP);
+    state.writer.u8(EmpathyBytecodeOpcode.YIELD);
     state.writer.u32(EmpathyPocYieldType.CHOICE);
-    state.writer.opcode(EmpathyBytecodeOpcode.YIELD_TAKE);
+    state.writer.u8(EmpathyBytecodeOpcode.YIELD_TAKE);
     const hiddenChoiceOffsets: number[] = [];
     for (const choice of choices) {
-        state.writer.opcode(EmpathyBytecodeOpcode.DUP);
-        state.writer.opcode(EmpathyBytecodeOpcode.PUSH_ATOM);
+        state.writer.u8(EmpathyBytecodeOpcode.DUP);
+        state.writer.u8(EmpathyBytecodeOpcode.PUSH_ATOM);
         state.writer.atom(EmpathyPocAtomType.CHOICE, choice.atom.value);
-        state.writer.opcode(EmpathyBytecodeOpcode.EQUAL);
-        state.writer.opcode(EmpathyBytecodeOpcode.JUMP_FALSE);
+        state.writer.u8(EmpathyBytecodeOpcode.EQUAL);
+        state.writer.u8(EmpathyBytecodeOpcode.JUMP_FALSE);
         const nextComparisonOffset = state.writer.offset;
         state.writer.u64(0n);
         if (choice.condition) {
             emitCondition(state, choice.condition);
-            state.writer.opcode(EmpathyBytecodeOpcode.JUMP_FALSE);
+            state.writer.u8(EmpathyBytecodeOpcode.JUMP_FALSE);
             hiddenChoiceOffsets.push(state.writer.offset);
             state.writer.u64(0n);
         }
-        state.writer.opcode(EmpathyBytecodeOpcode.DROP);
+        state.writer.u8(EmpathyBytecodeOpcode.DROP);
         emitJump(state, targets.get(choice.atom.value)!);
         state.writer.patchU64(nextComparisonOffset, state.writer.offset);
     }
     for (const offset of hiddenChoiceOffsets) state.writer.patchU64(offset, state.writer.offset);
-    state.writer.opcode(EmpathyBytecodeOpcode.DROP);
-    state.writer.opcode(EmpathyBytecodeOpcode.END);
+    state.writer.u8(EmpathyBytecodeOpcode.DROP);
+    state.writer.u8(EmpathyBytecodeOpcode.END);
 }
 
 function compilePortalReceiver(state: CompileState, node: CanvasNode): void {
@@ -986,7 +986,7 @@ function compileNode(state: CompileState, node: CanvasNode): void {
         case EmpathyCanvasNodeKind.SET: compileSet(state, node); return;
         case EmpathyCanvasNodeKind.CHOICE: compileChoice(state, node); return;
         case EmpathyCanvasNodeKind.PORTAL_RECEIVER: compilePortalReceiver(state, node); return;
-        case EmpathyCanvasNodeKind.END: state.writer.opcode(EmpathyBytecodeOpcode.END); return;
+        case EmpathyCanvasNodeKind.END: state.writer.u8(EmpathyBytecodeOpcode.END); return;
         default: throw new Error(`Unsupported semantic node ${nodeId(node)}`);
     }
 }
@@ -1035,10 +1035,10 @@ export function compileCanvas(canvas: Canvas, variables: readonly NarrativeVaria
         if (!condition) return { executionOffset, name: normalizedNodeText(entry) };
         const predicateOffset = state.writer.offset;
         emitCondition(state, condition);
-        state.writer.opcode(EmpathyBytecodeOpcode.REJECT_FALSE);
-        state.writer.opcode(EmpathyBytecodeOpcode.PUSH_U32);
+        state.writer.u8(EmpathyBytecodeOpcode.REJECT_FALSE);
+        state.writer.u8(EmpathyBytecodeOpcode.PUSH_U32);
         state.writer.u32(Number(entry.getData().empathyEntryMatchValue));
-        state.writer.opcode(EmpathyBytecodeOpcode.MATCH);
+        state.writer.u8(EmpathyBytecodeOpcode.MATCH);
         return { executionOffset, predicateOffset, name: normalizedNodeText(entry) };
     });
     for (const jump of state.patches) {
