@@ -193,17 +193,18 @@ directly to an Empathy bytecode payload and a companion C/C++ header next to the
 
 ### Frozen POC baseline
 
-Plugin version `0.0.3` targets and has been exercised with Obsidian Desktop `1.13.4`; the manifest is
+Plugin version `0.0.4` targets Obsidian Desktop `1.13.4`; the manifest is
 desktop-only and compatibility with other Obsidian releases is not claimed. Its locked build uses
 Obsidian API typings `1.13.1`—that package version is not the runtime application version. The
 recorded build toolchain is Node.js `22.17.1` with npm `11.4.2`.
 
-Known limitations are deliberate: the plugin depends on undocumented Canvas runtime objects,
-accepts only its current metadata schema, and provides no migration or backward compatibility.
+Known limitations are deliberate: the plugin depends on undocumented Canvas runtime objects and
+accepts only its current metadata schema, with no migration or backward-compatibility paths.
 Standard Canvas cards outside the reachable story graph are ignored, so they can still be used for
-notes. Only nodes reachable from an `ENTRY` are emitted. Choice options are ordered by Canvas edge
-ID, and multiple entry points are ordered by their Canvas node ID. The five-button toolbar may be
-clipped in an unusually narrow split pane; the background menu and commands remain available.
+notes. Only nodes reachable from an `ENTRY` are emitted. Multiple entry points are ordered by their
+Canvas node ID. Native Canvas groups remain organizational only. The toolbar and edge integration
+use runtime objects and the internal `canvas:node-menu` / `canvas:edge-menu` workspace events; a
+future Obsidian release may require adapting those small compatibility surfaces.
 
 ### Build and install
 
@@ -221,29 +222,89 @@ repository root; normal plugin builds do not require Python. Copy `plugins/obsid
 `<vault>/.obsidian/plugins/empathy-canvas-poc/`, then reload Obsidian and enable **Empathy** under
 **Settings -> Community plugins**.
 
-With a Canvas open, use the five colored Empathy buttons in its bottom card toolbar to add an
-**ENTRY**, **SAY**, **LINE**, **CHOICE**, or **END** at the viewport center. Precise placement remains
-available by right-clicking the empty background and choosing the corresponding **Add Empathy**
-action. The same actions are available in the command palette, and an existing text card can be
-converted from its context menu. Every typed card has a persistent visual header. `SAY` additionally
-has a separate character input; its native Canvas text editor contains only the dialogue.
+With a Canvas open, use the colored Empathy buttons in its bottom card toolbar to add an **ENTRY**,
+**SAY**, **LINE**, **CHOICE**, **SET**, or **END** at the viewport center. The Empathy ribbon icon or
+**Open Empathy panel** command opens the plugin's main right sidebar. It currently contains an action
+that compiles the most recently active Canvas plus the narrative-variable editor, and leaves room for
+more authoring tools. Each variable is edited in one compact name/type/access/delete row. Destructive
+icon buttons use a confirmation dialog that also reports outstanding references. Variables persist
+in plugin data using only a qualified name, author-facing type, and access mode. A qualified name has
+exactly one dot:
+`table.variable`. Tables are real Empathy parameter tables and emerge from the first occurrence of
+each table name in the configured variable list; parameter indices are global and follow the full
+variable list order.
 
-A ready-to-open branching example using every node type is available at
-`plugins/obsidian/examples/signal-tower-demo.canvas`.
+Each existing table has its own **Add variable** action whose qualified-name field starts with that
+table name. With no variables, the initial form accepts a complete `table.variable` name. A separate
+**Variable in new table** action remains available after tables exist.
 
-The cards are stored as standard JSON Canvas text nodes with an `empathyKind` metadata field. `SAY`
-also stores its character in `empathyCharacter`, keeping semantic fields out of the dialogue text:
+Every variable field uses the same searchable, table-grouped picker. A missing reference remains
+visible under its stored qualified name and blocks compilation. **+ New variable** opens the same
+Empathy panel and automatically selects a successfully created variable in the originating SET,
+edge condition, or ENTRY predicate. Deleting a referenced variable shows a usage warning but does
+not rewrite Canvas metadata. Search text is transactional: leaving a picker without selecting a
+different variable restores the committed value. Changing a variable preserves neighboring
+operation, comparison, literal, and match fields; incompatible retained values remain visible and
+validation reports them instead of silently replacing them.
+
+Precise node placement remains available from the Canvas background menu. The same node actions are
+available in the command palette, and an existing text card can be converted from its context menu.
+Every typed card has a persistent visual header. `SAY` has a separate character input; `SET` has a
+list of ordered typed variable/operation/literal assignments; `ENTRY` can have one typed
+availability predicate and a
+`UINT32` match value; and `CHOICE` owns an ordered, editable list of option texts with move controls.
+CHOICE and SET control sections grow with their rows instead of introducing nested scrollbars; the
+Canvas card is enlarged to the required minimum height while a larger manual size is preserved.
+When a SAY, LINE, or SET has no outgoing edge, its context menu can create and immediately connect a
+SAY, LINE, CHOICE, SET, or END below it, then focus the character, text, or variable field where
+applicable. This small shortcut uses Canvas `importData(..., false)` to upsert only the two involved
+nodes and their new edge.
+
+Conditional transitions are stored directly on ordinary Canvas edges. Both the edge context menu
+and the floating toolbar shown for a selected edge can make an edge conditional, make it `else`,
+edit or clear its condition, or link and unlink a CHOICE edge from an option defined by its source
+node. Conditions are limited to one variable, one typed literal, and one comparison. Each `if`
+branch has an explicit non-negative evaluation-order field; `else` has no order, is unique within
+the fan-out, and is always evaluated last. Edge IDs, positions, colors, geometry, and arbitrary
+prose labels never determine execution semantics. The native Canvas edge label belongs
+entirely to the author: Empathy never writes, clears, or styles it. Instead, the plugin renders its
+own separate edge badges such as `if npc.trust ≥ 0.5`, `else`, and `Climb the tower` directly in the
+edge SVG layer. Conditional badges share one purple accent; CHOICE badges use the same orange accent
+as their source node. These badges are derived from metadata and remain visually independent from
+any text the author puts in the native label. A conditional fan-out without `else` ends execution
+if no condition matches.
+
+The cards are stored as standard JSON Canvas text nodes with an `empathyKind` metadata field. Canvas
+metadata stores qualified variable names, never generated table or parameter indices:
 
 | Node | Card text | Edges |
 | --- | --- | --- |
-| `ENTRY` | Empty (or an optional note) | Exactly one outgoing edge |
-| `SAY` | Dialogue only; character is edited in the header | Exactly one outgoing edge |
-| `LINE` | The complete line | Exactly one outgoing edge |
-| `CHOICE` | Empty (or an optional note) | One or more labeled outgoing edges |
+| `ENTRY` | Entry name | Exactly one unconditional outgoing edge; optional `empathyEntryCondition` and match value |
+| `SAY` | Dialogue only; character is edited in the header | One normal edge or an ordered conditional fan-out |
+| `LINE` | The complete line | One normal edge or an ordered conditional fan-out |
+| `CHOICE` | Empty (or an optional note); option text lives in `empathyChoices` | Exactly one linked edge per option; `empathyChoiceIndex` selects the node-owned text |
+| `SET` | Empty | One or more ordered assignments in `empathyAssignments`; exactly one unconditional edge |
 | `END` | Empty (or an optional note) | No outgoing edges |
 
-Text-marker nodes and combined `Character\nDialogue` SAY payloads are not migrated or compiled;
-converting an ordinary text card treats its text literally.
+`SAY` and `LINE` may also use an explicitly ordered conditional fan-out with an optional
+implicit-last `else` instead of a single continuation. Each `SET` assignment supports `=` for
+booleans and `=`, `+=`, or `-=` for
+integers/floats; assignments execute from top to bottom before the single continuation. Boolean,
+integer, and float variables lower to `UINT8`, `INT32`, and `FLOAT32`; access maps directly to the
+Empathy parameter access flags. ENTRY nodes without availability predicates use
+`EMPATHY_PROGRAM_OFFSET_NONE` and therefore do not participate in `empathyMatch()`.
+
+Compilation performs lightweight structural and type validation before writing either artifact.
+Invalid nodes and edges receive Canvas styling/tooltips, and the compile Notice reports the first
+error plus a remaining count. The generated header includes `<stddef.h>` and `<stdint.h>`, one native
+state struct per derived table, table and global parameter constants, parameter descriptors using
+`offsetof()` against the correct struct, and the required parameter-table count for
+`Empathy_MachineDesc.max_parameter_tables`. TypeScript deliberately does not emulate native struct
+padding.
+
+Converting an ordinary text card treats its text literally. Arbitrary expressions, boolean trees,
+variable-to-variable comparisons, nested table paths, runtime preview, subgraphs, and stable
+variable UUIDs remain explicitly outside this POC.
 
 ## Building
 
