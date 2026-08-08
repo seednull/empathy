@@ -269,7 +269,9 @@ function parsedLiteral(variable: NarrativeVariable, literal: unknown): boolean |
 function isCondition(value: unknown): value is NarrativeCondition {
     if (!value || typeof value !== "object") return false;
     const condition = value as Partial<NarrativeCondition>;
-    return typeof condition.variable === "string" &&
+    const keys = Object.keys(condition);
+    return keys.length === 3 && keys.every((key) => key === "variable" || key === "comparison" || key === "literal") &&
+        typeof condition.variable === "string" &&
         typeof condition.comparison === "string" &&
         typeof condition.literal === "string";
 }
@@ -277,7 +279,11 @@ function isCondition(value: unknown): value is NarrativeCondition {
 export function isNarrativeChoice(value: unknown): value is NarrativeChoice {
     if (!value || typeof value !== "object") return false;
     const choice = value as Partial<NarrativeChoice>;
-    return isAuthoredAtom(choice.atom) && typeof choice.text === "string";
+    const keys = Object.keys(choice);
+    return keys.includes("atom") && keys.includes("text") &&
+        keys.every((key) => key === "atom" || key === "text" || key === "condition") &&
+        isAuthoredAtom(choice.atom) && typeof choice.text === "string" &&
+        (choice.condition === undefined || isCondition(choice.condition));
 }
 
 export function collectCanvasAtoms(canvas: Canvas): AtomSource[] {
@@ -371,6 +377,10 @@ function validateAuthoredAtoms(canvas: Canvas, issues: CanvasIssue[]): void {
             return;
         }
         const candidate = atom as Partial<AuthoredAtom>;
+        const unsupported = Object.keys(candidate).filter((key) => key !== "value" && key !== "key");
+        if (unsupported.length > 0) {
+            issueForNode(issues, node, `${label} has unsupported ${type.toUpperCase()} atom metadata: ${unsupported.join(", ")}`);
+        }
         if (!isValidAtomValue(candidate.value)) {
             issueForNode(issues, node, `${label} has an invalid ${type.toUpperCase()} atom value`);
         } else {
@@ -555,6 +565,11 @@ export function validateCanvas(canvas: Canvas, variables: readonly NarrativeVari
     if (!(canvas?.nodes instanceof Map) || !(canvas?.edges instanceof Map)) {
         return [...issues, { message: "Active Canvas runtime does not expose nodes and edges maps" }];
     }
+    for (const edge of canvas.edges.values()) {
+        if (Object.prototype.hasOwnProperty.call(edge.getData(), "empathyChoiceIndex")) {
+            issueForEdge(issues, edge, "Obsolete empathyChoiceIndex metadata is not supported");
+        }
+    }
     validateAuthoredAtoms(canvas, issues);
     const variableMap = new Map(variables.map((variable) => [variable.name, variable]));
     const entries = Array.from(canvas.nodes.values())
@@ -625,6 +640,12 @@ export function validateCanvas(canvas: Canvas, variables: readonly NarrativeVari
                     issueForNode(issues, node, `SET assignment ${assignmentIndex} is malformed`);
                     return;
                 }
+                const assignmentKeys = Object.keys(assignment);
+                if (assignmentKeys.length !== 3 ||
+                    !assignmentKeys.includes("variable") || !assignmentKeys.includes("operation") || !assignmentKeys.includes("literal")) {
+                    issueForNode(issues, node, `SET assignment ${assignmentIndex} does not match the current metadata schema`);
+                    return;
+                }
                 const variable = typeof assignment.variable === "string"
                     ? variableMap.get(assignment.variable)
                     : undefined;
@@ -671,6 +692,12 @@ export function validateCanvas(canvas: Canvas, variables: readonly NarrativeVari
                     return;
                 }
                 const option = choice as Partial<NarrativeChoice>;
+                const optionKeys = Object.keys(option);
+                if (!optionKeys.includes("atom") || !optionKeys.includes("text") ||
+                    optionKeys.some((key) => key !== "atom" && key !== "text" && key !== "condition")) {
+                    issueForNode(issues, node, `CHOICE option ${choiceIndex} does not match the current metadata schema`);
+                    return;
+                }
                 if (typeof option.text !== "string" || option.text.trim().length === 0) {
                     issueForNode(issues, node, `CHOICE option ${choiceIndex} requires non-empty text`);
                 }

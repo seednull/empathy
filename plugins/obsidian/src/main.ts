@@ -6,6 +6,9 @@ import {
     EmpathyCanvasNodeKind,
     generateHeader,
     NarrativeVariable,
+    NarrativeVariableAccess,
+    NarrativeVariableType,
+    parseVariableName,
 } from "./compile";
 import {
     allocateAuthoredAtom,
@@ -13,6 +16,7 @@ import {
     AuthoredAtom,
     AuthoredAtomType,
     initialAtomAllocatorState,
+    isValidAtomValue,
 } from "./atoms";
 import { EmpathyCanvasIntegration } from "./canvas";
 import {
@@ -39,10 +43,36 @@ export default class EmpathyPlugin extends Plugin {
     private dataSave: Promise<void> = Promise.resolve();
 
     async onload(): Promise<void> {
-        const stored = await this.loadData() as EmpathyPluginData | null;
-        if (stored) {
-            this.variables = [...stored.variables];
-            this.nextAtomValue = { ...stored.nextAtomValue };
+        const stored = await this.loadData() as unknown;
+        if (stored !== null && stored !== undefined) {
+            if (typeof stored !== "object" || Array.isArray(stored)) {
+                throw new Error("Empathy plugin data does not match the current schema");
+            }
+            const candidate = stored as Partial<EmpathyPluginData>;
+            const names = new Set<string>();
+            const variablesAreCurrent = Array.isArray(candidate.variables) && candidate.variables.every((variable) => {
+                const keys = variable !== null && typeof variable === "object" ? Object.keys(variable) : [];
+                if (variable === null || typeof variable !== "object" ||
+                    keys.length !== 3 || !keys.includes("name") || !keys.includes("type") || !keys.includes("access") ||
+                    typeof variable.name !== "string" || parseVariableName(variable.name) === undefined ||
+                    !Object.values(NarrativeVariableType).includes(variable.type) ||
+                    !Object.values(NarrativeVariableAccess).includes(variable.access) || names.has(variable.name)) {
+                    return false;
+                }
+                names.add(variable.name);
+                return true;
+            });
+            const allocator = candidate.nextAtomValue;
+            const dataKeys = Object.keys(candidate);
+            const allocatorKeys = allocator ? Object.keys(allocator) : [];
+            if (dataKeys.length !== 2 || !dataKeys.includes("variables") || !dataKeys.includes("nextAtomValue") ||
+                !variablesAreCurrent || !allocator || allocatorKeys.length !== 2 ||
+                !allocatorKeys.includes("line") || !allocatorKeys.includes("choice") ||
+                !isValidAtomValue(allocator.line) || !isValidAtomValue(allocator.choice)) {
+                throw new Error("Empathy plugin data does not match the current schema");
+            }
+            this.variables = [...candidate.variables!];
+            this.nextAtomValue = { ...allocator };
         }
         const withActiveCanvas = <T>(fallback: T, action: (canvas: Canvas, view: InternalCanvasView) => T): T => {
             const view = this.activeCanvasView();

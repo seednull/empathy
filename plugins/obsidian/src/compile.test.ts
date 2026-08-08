@@ -365,6 +365,56 @@ test("formats CHOICE badges from node options and ignores native edge labels", (
     assert.equal(formatChoiceBadge({ label: "Anything the author wants" }, [climb]), "Unlinked choice");
 });
 
+test("rejects obsolete Canvas shapes without migrating their metadata", () => {
+    const markerEntry = new MockNode("marker-entry", {
+        type: "text",
+        text: "Start",
+        empathyNodeType: "entry",
+    } as CanvasNodeData);
+    const markerEnd = node("marker-end", EmpathyCanvasNodeKind.END);
+    const markerEdge = new MockEdge("marker-edge", markerEntry, markerEnd);
+    const markerCanvas = graph([markerEntry, markerEnd], [markerEdge]);
+    const markerSnapshot = JSON.stringify([markerEntry.getData(), markerEnd.getData(), markerEdge.getData()]);
+    assert.throws(() => compileCanvas(markerCanvas, variables), /Canvas contains no ENTRY node/);
+    assert.equal(JSON.stringify([markerEntry.getData(), markerEnd.getData(), markerEdge.getData()]), markerSnapshot);
+
+    const typedEntry = new MockNode("typed-entry", {
+        type: "empathy-entry",
+        text: "Start",
+        empathyKind: EmpathyCanvasNodeKind.ENTRY,
+    });
+    const typedEnd = node("typed-end", EmpathyCanvasNodeKind.END);
+    const typedEdge = new MockEdge("typed-edge", typedEntry, typedEnd);
+    const typedCanvas = graph([typedEntry, typedEnd], [typedEdge]);
+    const typedSnapshot = JSON.stringify([typedEntry.getData(), typedEnd.getData(), typedEdge.getData()]);
+    assert.throws(() => compileCanvas(typedCanvas, variables), /Canvas contains no ENTRY node/);
+    assert.equal(JSON.stringify([typedEntry.getData(), typedEnd.getData(), typedEdge.getData()]), typedSnapshot);
+
+    const entry = node("entry", EmpathyCanvasNodeKind.ENTRY);
+    const oldChoice = node("choice", EmpathyCanvasNodeKind.CHOICE, { empathyChoices: [choice("Leave", undefined, 73)] });
+    const end = node("end", EmpathyCanvasNodeKind.END);
+    const entryEdge = new MockEdge("entry-choice", entry, oldChoice);
+    const oldChoiceEdge = new MockEdge("choice-end", oldChoice, end, { empathyChoiceIndex: 0 } as CanvasEdgeData);
+    const choiceCanvas = graph([entry, oldChoice, end], [entryEdge, oldChoiceEdge]);
+    const choiceSnapshot = JSON.stringify([oldChoice.getData(), oldChoiceEdge.getData()]);
+    assert.throws(() => compileCanvas(choiceCanvas, variables), /Obsolete empathyChoiceIndex metadata is not supported/);
+    assert.equal(JSON.stringify([oldChoice.getData(), oldChoiceEdge.getData()]), choiceSnapshot);
+    oldChoiceEdge.setData({ ...oldChoiceEdge.getData(), empathyChoiceAtom: 73 });
+    const mixedChoiceSnapshot = JSON.stringify([oldChoice.getData(), oldChoiceEdge.getData()]);
+    assert.throws(() => compileCanvas(choiceCanvas, variables), /Obsolete empathyChoiceIndex metadata is not supported/);
+    assert.equal(JSON.stringify([oldChoice.getData(), oldChoiceEdge.getData()]), mixedChoiceSnapshot);
+
+    const say = node("say", EmpathyCanvasNodeKind.SAY, { text: "Combined old dialogue" });
+    const sayEnd = node("say-end", EmpathyCanvasNodeKind.END);
+    const sayCanvas = graph(
+        [entry, say, sayEnd],
+        [new MockEdge("entry-say", entry, say), new MockEdge("say-end", say, sayEnd)],
+    );
+    const saySnapshot = JSON.stringify(say.getData());
+    assert.throws(() => compileCanvas(sayCanvas, variables), /SAY requires a non-empty character and dialogue/);
+    assert.equal(JSON.stringify(say.getData()), saySnapshot);
+});
+
 test("derives real parameter tables by first variable occurrence", () => {
     const result = compileCanvas(simpleEndGraph().canvas, variables);
     assert.deepEqual(result.tables, [
