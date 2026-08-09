@@ -229,11 +229,12 @@ With a Canvas open, use the colored Empathy buttons in its bottom card toolbar t
 center. Receiver and transmitter have separate buttons and directional icons. The Empathy ribbon icon or
 **Open Empathy panel** command opens the plugin's main right sidebar. It contains separate actions
 that generate the most recently active Canvas header or bytecode, an explicit persisted header-prefix
-field, the narrative-variable editor, and an Atoms browser. Each variable is edited in one compact
-name/type/access/delete row. Destructive
-icon buttons use a confirmation dialog that also reports outstanding references. Variables persist
-in plugin data using only a qualified name, author-facing type, and access mode. A qualified name has
-exactly one dot:
+field, the narrative-variable editor, a shared-character editor, and separate Lines and Choices atom
+sections. Each variable is edited in one compact name/type/access/delete row. Character rows keep the
+optional human-readable ID beside the Unicode display value, followed by Generate/Remove ID, Show
+usages, and Delete actions. Destructive icon buttons use a confirmation dialog that also reports
+outstanding references. Both shared-definition lists persist in plugin data.
+Variables use only a qualified name, author-facing type, and access mode. A qualified name has exactly one dot:
 `table.variable`. Tables are real Empathy parameter tables and emerge from the first occurrence of
 each table name in the configured variable list; parameter indices are global and follow the full
 variable list order.
@@ -251,12 +252,19 @@ different variable restores the committed value. Changing a variable preserves n
 operation, comparison, literal, and match fields; incompatible retained values remain visible and
 validation reports them instead of silently replacing them.
 
+Characters are deliberately small shared definitions: a Unicode display name plus one mandatory,
+automatically allocated CHARACTER atom whose optional ASCII key is managed in Characters. A SAY stores
+only `empathyCharacterAtom`, never a display name, key, or array index. Its picker can create a named
+character inline and immediately select the new atom. Renaming a character or changing its key does
+not touch SAY metadata. Deleting a referenced character leaves the numeric references explicit;
+they appear as missing and block compilation until the author selects another definition.
+
 Precise node placement remains available from the Canvas background menu. The same node actions are
 available in the command palette, and an existing text card can be converted from its context menu.
 Dropping a dragged connection in empty space adds every Empathy node kind to the native popup; the
 selected node is created at the drop point and the new edge preserves the dragged source and target
 sides.
-Every typed card has a persistent visual header. `SAY` has a separate character input; `SET` has a
+Every typed card has a persistent visual header. `SAY` has a searchable shared-character picker; `SET` has a
 list of ordered typed variable/operation/literal assignments; `ENTRY` edits its name in the header
 and can have one typed availability predicate and a
 `UINT32` match value; and `CHOICE` owns an ordered, editable list of options with move controls and
@@ -301,7 +309,7 @@ metadata stores qualified variable names, never generated table or parameter ind
 | Node | Card text | Edges |
 | --- | --- | --- |
 | `ENTRY` | Native body hidden; entry name is edited in the header | Exactly one unconditional outgoing edge; optional `empathyEntryCondition` and match value |
-| `SAY` | Dialogue plus `empathyLineAtom`; character is edited in the header | One normal edge or an ordered conditional fan-out |
+| `SAY` | Dialogue plus owned `empathyLineAtom`; `empathyCharacterAtom` references a shared definition selected in the header | One normal edge or an ordered conditional fan-out |
 | `LINE` | The complete line plus `empathyLineAtom` | One normal edge or an ordered conditional fan-out |
 | `CHOICE` | Native body hidden; each `empathyChoices` entry owns atom, text, and optional condition metadata | Exactly one linked edge per option; `empathyChoiceAtom` references the stable option atom |
 | `SET` | Native body hidden | One or more ordered assignments in `empathyAssignments`; exactly one unconditional edge |
@@ -317,32 +325,35 @@ integer, and float variables lower to `UINT8`, `INT32`, and `FLOAT32`; access ma
 Empathy parameter access flags. ENTRY nodes without availability predicates use
 `EMPATHY_PROGRAM_OFFSET_NONE` and therefore do not participate in `empathyMatch()`.
 
-Every authored LINE and CHOICE atom has a persistent numeric value used as its mandatory runtime
-identity. The plugin allocates those values monotonically per atom type and stores them directly on
-the owning SAY/LINE node or CHOICE option. Moving cards, reordering options, and editing display text
-do not change numeric identity. Missing, invalid, or duplicate numeric atoms remain compilation
-errors. Atom records accept only `value` and optional `key`; obsolete lifecycle fields and the old
-index-based CHOICE edge metadata are rejected rather than rewritten. Native duplication of an
-already-known node receives fresh numeric values.
+Every authored LINE, CHARACTER, and CHOICE atom has a persistent numeric value used as its mandatory
+runtime identity. The plugin allocates values monotonically per atom type. LINE atoms are owned by
+SAY/LINE nodes, CHOICE atoms by options, and CHARACTER atoms by shared character definitions.
+Moving cards, reordering options, and editing display text do not change numeric identity. Missing,
+invalid, or duplicate numeric atoms remain compilation errors. Atom records accept only `value` and
+optional `key`; obsolete lifecycle fields and the old index-based CHOICE edge metadata are rejected
+rather than rewritten. Native duplication gives a SAY a fresh LINE atom while preserving its shared
+CHARACTER reference.
 
 A separate human-readable atom ID is optional. IDs use the deliberately small ASCII grammar
-`[a-z][a-z0-9_]*`, are at most 64 characters, and are unique within LINE or CHOICE atoms. New atoms
-remain unassigned until the author explicitly generates an ID in the Atoms section, after which it
+`[a-z][a-z0-9_]*`, are at most 64 characters, and are unique within each LINE, CHARACTER, or CHOICE atom type. New atoms
+remain unassigned until the author explicitly generates an ID in the corresponding Characters, Lines,
+or Choices section, after which it
 can be replaced with the project's preferred name in the inline editor.
 Generation uses the current display text, including a small deterministic Cyrillic-to-Latin
-transliteration; unusable text falls back to `line_<value>` or `choice_<value>`, and collisions receive
+transliteration; unusable text falls back to `<type>_<value>`, and collisions receive
 `_2`, `_3`, and so on. Once assigned, normal text edits never rewrite an ID. Regenerate is explicit,
 and clearing the inline editor returns the atom to its valid unnamed state. IDs are project/tooling
 identifiers rather than localized labels and are not displayed on normal Canvas cards.
 
-The Atoms section derives one flat list from the active Canvas rather than a separate registry. Each
-compact row keeps the inline ID editor, authored text, Generate/Regenerate, and source navigation on
-one line. An unnamed atom displays a non-persisted `<node-kind>_<value>` stub such as `say_1482` or
-`choice_73`; clearing a project ID restores that stub. Rows sort lexicographically by their project ID
-or stub, so shared project prefixes naturally stay together. Numeric values are not shown separately,
-and atom/node type labels remain absent. Search covers the displayed ID or stub, authored text, and
-character. CHOICE source lookup uses node ID plus stable choice atom value, so it continues to resolve
-the same option after reordering. No identifier groups or separate atom registry are persisted.
+The Lines and Choices sections derive owned atoms from the active Canvas. Each compact row keeps the
+inline ID editor, authored text, Generate/Regenerate, Remove, and source navigation actions on one
+line. An unnamed atom displays a non-persisted `<node-kind>_<value>` stub such as `say_1482` or
+`choice_73`; clearing a project ID restores that stub. Each section has its own search and an explicit
+lexicographic-sort button. Editing an ID does not otherwise reorder the list. Search covers the
+displayed ID or stub and authored text. CHOICE source lookup
+uses node ID plus stable choice atom value, so it continues to resolve the same option after
+reordering. Character lookup scans SAY nodes in the active Canvas; no cross-Canvas index or separate
+atom registry is persisted.
 
 CHOICE runtime requests now contain only the visible CHOICE atoms on the yield stack, in authored
 display order. The host obtains the count with `empathyGetYieldStackSize()`, presents those atoms,
@@ -368,7 +379,9 @@ CHARACTER, and CHOICE atom values are enum members, using an authored ID when pr
 fallback otherwise.
 
 Header sections are emitted as pragma/include, defines, enums and supporting structs, atom text
-arrays, then descriptor arrays. An atom text's optional ID pointer is null when unassigned. Authored
+arrays, then descriptor arrays. LINE, CHARACTER, and CHOICE text arrays all carry the stable numeric
+value, so character values need not be dense or derived from table position. An atom text's optional
+ID pointer is null when unassigned. Authored
 LINE, CHOICE, and character strings remain human-readable Unicode inside ordinary string literals;
 the file itself is UTF-8, while quotes, backslashes, controls, and C17 trigraph hazards are escaped
 locally. Consumers must interpret the source and execution charset as UTF-8 (`/utf-8` on MSVC or
