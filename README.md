@@ -386,8 +386,8 @@ LINE, CHOICE, and character strings remain human-readable Unicode inside ordinar
 the file itself is UTF-8, while quotes, backslashes, controls, and C17 trigraph hazards are escaped
 locally. Consumers must interpret the source and execution charset as UTF-8 (`/utf-8` on MSVC or
 `-finput-charset=UTF-8 -fexec-charset=UTF-8` on GCC/Clang). The header also contains one prefixed
-native state struct per derived table, a generated uppercase `OFFSET_OF` macro that converts a field
-address through a null structure pointer to `uint64_t`, and the required parameter-table count for
+native state struct per derived table, includes `<stddef.h>`, uses standard `offsetof(TYPE, MEMBER)`
+for parameter byte offsets, and emits the required parameter-table count for
 `Empathy_MachineDesc.max_parameter_tables`. TypeScript deliberately does not emulate native struct padding.
 
 Converting an ordinary text card treats its text literally. Arbitrary expressions, boolean trees,

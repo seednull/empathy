@@ -1802,11 +1802,10 @@ test("rejects duplicate transmitters for the same portal", () => {
     ), variables), /must have exactly one TRANSMITTER; found 2/);
 });
 
-test("orders case-preserving header sections and emits only the Empathy include", () => {
+test("orders case-preserving header sections and emits standard offsetof expressions", () => {
     const result = compileCanvas(simpleEndGraph().canvas, variables);
     const header = generateHeader(result, "Radio_Story");
-    assert.deepEqual(header.match(/^#include .+$/gm), ["#include <empathy.h>"]);
-    assert.doesNotMatch(header, /\bstddef\b/);
+    assert.deepEqual(header.match(/^#include .+$/gm), ["#include <stddef.h>", "#include <empathy.h>"]);
     assert.doesNotMatch(header, /_EMPATHY/);
     assert.match(header, /typedef struct Radio_Story_WorldState[\s\S]*uint8_t radio_found;[\s\S]*float time;[\s\S]*} Radio_Story_WorldState;/);
     assert.match(header, /typedef struct Radio_Story_NpcState[\s\S]*float trust;[\s\S]*} Radio_Story_NpcState;/);
@@ -1829,9 +1828,9 @@ test("orders case-preserving header sections and emits only the Empathy include"
     assert.match(header, /RADIO_STORY_PARAMETER_TABLE_NPC = 1/);
     assert.match(header, /RADIO_STORY_PARAMETER_TABLE_QUEST = 2/);
     assert.match(header, /RADIO_STORY_PARAMETER_WORLD_TIME = 2/);
-    assert.ok(header.includes("#define RADIO_STORY_OFFSET_OF(TYPE, MEMBER) ((uint64_t)&(((TYPE *)0)->MEMBER))"));
-    assert.match(header, /RADIO_STORY_OFFSET_OF\(Radio_Story_WorldState, time\)/);
-    assert.match(header, /RADIO_STORY_OFFSET_OF\(Radio_Story_NpcState, trust\)/);
+    assert.doesNotMatch(header, /RADIO_STORY_OFFSET_OF/);
+    assert.match(header, /offsetof\(Radio_Story_WorldState, time\)/);
+    assert.match(header, /offsetof\(Radio_Story_NpcState, trust\)/);
     assert.match(header, /EMPATHY_VALUE_BASE_TYPE_FLOAT32/);
     assert.match(header, /EMPATHY_PARAMETER_ACCESS_FLAGS_READ,/);
     assert.match(header, /#define RADIO_STORY_PARAMETER_TABLE_COUNT 3u/);
@@ -1840,7 +1839,8 @@ test("orders case-preserving header sections and emits only the Empathy include"
     assert.doesNotMatch(header, /typedef enum Radio_Story_(?:Line|Character|Choice)Atom_t/);
 
     const pragma = header.indexOf("#pragma once");
-    const include = header.indexOf("#include <empathy.h>");
+    const stddefInclude = header.indexOf("#include <stddef.h>");
+    const empathyInclude = header.indexOf("#include <empathy.h>");
     const firstDefine = header.indexOf("#define RADIO_STORY_");
     const lastDefine = header.lastIndexOf("#define RADIO_STORY_");
     const firstEnum = header.indexOf("typedef enum Radio_Story_");
@@ -1849,7 +1849,7 @@ test("orders case-preserving header sections and emits only the Empathy include"
     const lastAtomTexts = header.indexOf("static const Radio_Story_AtomText radio_story_choice_atoms[]");
     const descriptors = header.indexOf("static const Empathy_AtomTypeDesc radio_story_atom_types[]");
     assert.equal(pragma, 0);
-    assert.ok(pragma < include && include < firstDefine);
+    assert.ok(pragma < stddefInclude && stddefInclude < empathyInclude && empathyInclude < firstDefine);
     assert.ok(firstDefine <= lastDefine && lastDefine < firstEnum);
     assert.ok(firstEnum <= lastEnum && lastEnum < firstAtomTexts);
     assert.ok(firstAtomTexts < lastAtomTexts && lastAtomTexts < descriptors);
