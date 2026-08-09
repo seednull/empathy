@@ -35,6 +35,14 @@ enum LineAtom : uint32_t
 	LINE_STATION_CLOCK_MOVES,
 };
 
+enum CharacterAtom : uint32_t
+{
+	// Shared authored identities; SAY instructions reference these values directly.
+	CHARACTER_MARA = 12,
+	CHARACTER_ILYA = 13,
+	CHARACTER_KEEPER = 14,
+};
+
 enum ChoiceAtom : uint32_t
 {
 	CHOICE_CLIMB_TO_SIGNAL_ROOM = 73,
@@ -62,11 +70,11 @@ static const AtomText lines[] =
 	{LINE_STATION_CLOCK_MOVES, "Inside, the station clock begins to move again."},
 };
 
-static const char *characters[] =
+static const AtomText characters[] =
 {
-	"Mara",
-	"Ilya",
-	"Keeper",
+	{CHARACTER_MARA, "Mara"},
+	{CHARACTER_ILYA, "Ilya"},
+	{CHARACTER_KEEPER, "Keeper"},
 };
 
 static const AtomText choices[] =
@@ -189,9 +197,10 @@ static void handleSay(Empathy_Instance instance, Empathy_Machine machine)
 	assert(character.type.base_type == EMPATHY_VALUE_BASE_TYPE_ATOM);
 	assert(character.type.atom_type == ATOM_TYPE_CHARACTER);
 	assert(character.data.atom.type == ATOM_TYPE_CHARACTER);
-	assert(character.data.atom.value < sizeof(characters) / sizeof(characters[0]));
+	const char *character_name = findAtomText(characters, character.data.atom.value);
+	assert(character_name);
 
-	std::cout << characters[character.data.atom.value] << ": " << line_text << "\n";
+	std::cout << character_name << ": " << line_text << "\n";
 
 	result = empathyYieldStackPop(instance, machine, &character);
 	assert(result == EMPATHY_SUCCESS);
@@ -204,7 +213,7 @@ static void runStory(Empathy_Instance instance)
 	Empathy_AtomTypeDesc atom_types[] =
 	{
 		{ATOM_TYPE_LINE, LINE_RAIN_ERASED_ROAD, LINE_STATION_CLOCK_MOVES},
-		{ATOM_TYPE_CHARACTER, 0, static_cast<uint32_t>(sizeof(characters) / sizeof(characters[0])) - 1},
+		{ATOM_TYPE_CHARACTER, CHARACTER_MARA, CHARACTER_KEEPER},
 		{ATOM_TYPE_CHOICE, CHOICE_CLIMB_TO_SIGNAL_ROOM, CHOICE_FOLLOW_FOOTPRINTS},
 	};
 
@@ -236,8 +245,8 @@ static void runStory(Empathy_Instance instance)
 
 	/*
 	 * 000: line LINE_RAIN_ERASED_ROAD
-	 * 014: say  LINE_SIGNAL_TOWER_LIT, character[0]
-	 * 037: say  LINE_SOMEONE_WAITING, character[1]
+	 * 014: say  LINE_SIGNAL_TOWER_LIT, CHARACTER_MARA
+	 * 037: say  LINE_SOMEONE_WAITING, CHARACTER_ILYA
 	 * 060: choice [CHOICE_CLIMB_TO_SIGNAL_ROOM, CHOICE_FOLLOW_FOOTPRINTS]
 	 * 083: take selected CHOICE atom and dispatch; invalid atoms end at 145
 	 * 146: first branch
@@ -251,14 +260,14 @@ static void runStory(Empathy_Instance instance)
 		EMPATHY_BYTECODE_OP_YIELD_PUSH_ATOM, 0x00, 0x00, 0x00, 0x00, 0xE8, 0x03, 0x00, 0x00,
 		EMPATHY_BYTECODE_OP_YIELD, 0x00, 0x00, 0x00, 0x00,
 
-		// say line[1], character[0]
+		// say LINE_SIGNAL_TOWER_LIT, CHARACTER_MARA
 		EMPATHY_BYTECODE_OP_YIELD_PUSH_ATOM, 0x00, 0x00, 0x00, 0x00, 0xE9, 0x03, 0x00, 0x00,
-		EMPATHY_BYTECODE_OP_YIELD_PUSH_ATOM, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		EMPATHY_BYTECODE_OP_YIELD_PUSH_ATOM, 0x01, 0x00, 0x00, 0x00, 0x0C, 0x00, 0x00, 0x00,
 		EMPATHY_BYTECODE_OP_YIELD, 0x02, 0x00, 0x00, 0x00,
 
-		// say line[2], character[1]
+		// say LINE_SOMEONE_WAITING, CHARACTER_ILYA
 		EMPATHY_BYTECODE_OP_YIELD_PUSH_ATOM, 0x00, 0x00, 0x00, 0x00, 0xEA, 0x03, 0x00, 0x00,
-		EMPATHY_BYTECODE_OP_YIELD_PUSH_ATOM, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+		EMPATHY_BYTECODE_OP_YIELD_PUSH_ATOM, 0x01, 0x00, 0x00, 0x00, 0x0D, 0x00, 0x00, 0x00,
 		EMPATHY_BYTECODE_OP_YIELD, 0x02, 0x00, 0x00, 0x00,
 
 		// visible CHOICE atoms only
@@ -287,7 +296,7 @@ static void runStory(Empathy_Instance instance)
 		EMPATHY_BYTECODE_OP_YIELD_PUSH_ATOM, 0x00, 0x00, 0x00, 0x00, 0xEB, 0x03, 0x00, 0x00,
 		EMPATHY_BYTECODE_OP_YIELD, 0x00, 0x00, 0x00, 0x00,
 		EMPATHY_BYTECODE_OP_YIELD_PUSH_ATOM, 0x00, 0x00, 0x00, 0x00, 0xEC, 0x03, 0x00, 0x00,
-		EMPATHY_BYTECODE_OP_YIELD_PUSH_ATOM, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		EMPATHY_BYTECODE_OP_YIELD_PUSH_ATOM, 0x01, 0x00, 0x00, 0x00, 0x0C, 0x00, 0x00, 0x00,
 		EMPATHY_BYTECODE_OP_YIELD, 0x02, 0x00, 0x00, 0x00,
 		EMPATHY_BYTECODE_OP_JUMP, 0xE5, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 
@@ -295,17 +304,17 @@ static void runStory(Empathy_Instance instance)
 		EMPATHY_BYTECODE_OP_YIELD_PUSH_ATOM, 0x00, 0x00, 0x00, 0x00, 0xED, 0x03, 0x00, 0x00,
 		EMPATHY_BYTECODE_OP_YIELD, 0x00, 0x00, 0x00, 0x00,
 		EMPATHY_BYTECODE_OP_YIELD_PUSH_ATOM, 0x00, 0x00, 0x00, 0x00, 0xEE, 0x03, 0x00, 0x00,
-		EMPATHY_BYTECODE_OP_YIELD_PUSH_ATOM, 0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+		EMPATHY_BYTECODE_OP_YIELD_PUSH_ATOM, 0x01, 0x00, 0x00, 0x00, 0x0D, 0x00, 0x00, 0x00,
 		EMPATHY_BYTECODE_OP_YIELD, 0x02, 0x00, 0x00, 0x00,
 
 		// Shared ending
 		EMPATHY_BYTECODE_OP_YIELD_PUSH_ATOM, 0x00, 0x00, 0x00, 0x00, 0xEF, 0x03, 0x00, 0x00,
 		EMPATHY_BYTECODE_OP_YIELD, 0x00, 0x00, 0x00, 0x00,
 		EMPATHY_BYTECODE_OP_YIELD_PUSH_ATOM, 0x00, 0x00, 0x00, 0x00, 0xF0, 0x03, 0x00, 0x00,
-		EMPATHY_BYTECODE_OP_YIELD_PUSH_ATOM, 0x01, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00,
+		EMPATHY_BYTECODE_OP_YIELD_PUSH_ATOM, 0x01, 0x00, 0x00, 0x00, 0x0E, 0x00, 0x00, 0x00,
 		EMPATHY_BYTECODE_OP_YIELD, 0x02, 0x00, 0x00, 0x00,
 		EMPATHY_BYTECODE_OP_YIELD_PUSH_ATOM, 0x00, 0x00, 0x00, 0x00, 0xF1, 0x03, 0x00, 0x00,
-		EMPATHY_BYTECODE_OP_YIELD_PUSH_ATOM, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		EMPATHY_BYTECODE_OP_YIELD_PUSH_ATOM, 0x01, 0x00, 0x00, 0x00, 0x0C, 0x00, 0x00, 0x00,
 		EMPATHY_BYTECODE_OP_YIELD, 0x02, 0x00, 0x00, 0x00,
 		EMPATHY_BYTECODE_OP_YIELD_PUSH_ATOM, 0x00, 0x00, 0x00, 0x00, 0xF2, 0x03, 0x00, 0x00,
 		EMPATHY_BYTECODE_OP_YIELD, 0x00, 0x00, 0x00, 0x00,
