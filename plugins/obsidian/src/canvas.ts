@@ -19,7 +19,6 @@ import {
     EmpathyCanvasNodeKind,
     getEmpathyCanvasNodeKind,
     isNarrativeChoice,
-    AtomSource,
     NarrativeAssignment,
     NarrativeComparison,
     NarrativeCondition,
@@ -29,7 +28,9 @@ import {
     NarrativeVariableType,
     parseVariableName,
     validateCanvas,
+    OwnedAtomSource,
 } from "./compile";
+import { NarrativeCharacter } from "./characters";
 
 interface CanvasPoint { x: number; y: number }
 interface CanvasSize { width: number; height: number }
@@ -42,6 +43,8 @@ interface CanvasUi {
     setTooltip(element: HTMLElement, tooltip: string): void;
     showNotice(message: string): void;
     getVariables(): readonly NarrativeVariable[];
+    getCharacters(): readonly NarrativeCharacter[];
+    createCharacter(name: string): Promise<NarrativeCharacter>;
     openPanel(selectCreated?: (variable: NarrativeVariable) => void): void;
     allocateAtom: CanvasAtomAllocator;
     atomsChanged(): void;
@@ -105,7 +108,6 @@ interface NodePatch {
     headerEl?: HTMLElement;
     signature?: string;
     autoHeight?: number;
-    characterSaveTimer?: ReturnType<typeof setTimeout>;
 }
 
 interface EdgeBadge {
@@ -159,7 +161,7 @@ const headerOnlyNodeKinds = new Set<EmpathyCanvasNodeKind>([
     EmpathyCanvasNodeKind.END,
 ]);
 const nodeFocusSelectors: Partial<Record<EmpathyCanvasNodeKind, string>> = {
-    [EmpathyCanvasNodeKind.SAY]: ".empathy-canvas-character-input",
+    [EmpathyCanvasNodeKind.SAY]: ".empathy-character-picker input",
     [EmpathyCanvasNodeKind.ENTRY]: ".empathy-canvas-entry-input",
     [EmpathyCanvasNodeKind.CHOICE]: ".empathy-choice-row input, .empathy-choice-add",
     [EmpathyCanvasNodeKind.SET]: ".empathy-variable-picker input",
@@ -185,7 +187,7 @@ const convertibleNodeKinds: readonly EmpathyCanvasNodeKind[] = [
     EmpathyCanvasNodeKind.END,
 ];
 const nodeSemanticKeys = [
-    "empathyCharacter", "empathyAssignments", "empathyEntryCondition", "empathyEntryMatchValue", "empathyLineAtom", "empathyChoices",
+    "empathyCharacter", "empathyCharacterAtom", "empathyAssignments", "empathyEntryCondition", "empathyEntryMatchValue", "empathyLineAtom", "empathyChoices",
     "empathyPortalId", "empathyPortalName",
 ] as const;
 const edgeSemanticKeys = ["empathyCondition", "empathyElse", "empathyConditionOrder", "empathyChoiceAtom"] as const;
@@ -213,7 +215,6 @@ function defaultCondition(variable?: NarrativeVariable): NarrativeCondition {
 
 function semanticDefaults(kind: EmpathyCanvasNodeKind): Partial<CanvasNodeData> {
     switch (kind) {
-        case EmpathyCanvasNodeKind.SAY: return { empathyCharacter: "Character" };
         case EmpathyCanvasNodeKind.CHOICE: return { empathyChoices: [] };
         case EmpathyCanvasNodeKind.SET: return { empathyAssignments: [{ variable: "", operation: "=", literal: "" }] };
         default: return {};
@@ -230,6 +231,22 @@ export function convertedEmpathyNodeData(data: CanvasNodeData, kind: EmpathyCanv
     };
     for (const key of nodeSemanticKeys) delete converted[key];
     return { ...converted, ...semanticDefaults(kind) };
+}
+
+export function selectNarrativeCharacter(
+    data: CanvasNodeData,
+    character: NarrativeCharacter,
+): CanvasNodeData {
+    return { ...data, empathyCharacterAtom: character.atom.value };
+}
+
+export function filterNarrativeCharacters(
+    characters: readonly NarrativeCharacter[],
+    query?: string,
+): NarrativeCharacter[] {
+    const normalized = query?.trim().toLowerCase() ?? "";
+    return characters.filter((character) =>
+        normalized.length === 0 || character.name.toLowerCase().includes(normalized) || character.atom.key?.includes(normalized));
 }
 
 function patchProperty<T extends object, K extends keyof T>(
@@ -282,11 +299,11 @@ export function formatChoiceBadge(data: CanvasEdgeData, choices: readonly Narrat
 }
 
 type CanvasAtomAllocator = (
-    type: AuthoredAtomType,
+    type: OwnedAtomSource["type"],
     usedValues: ReadonlySet<number>,
 ) => AuthoredAtom;
 
-function usedAtomValues(canvas: Canvas, type: AtomSource["type"], nodeIds?: ReadonlySet<string>): Set<number> {
+function usedAtomValues(canvas: Canvas, type: OwnedAtomSource["type"], nodeIds?: ReadonlySet<string>): Set<number> {
     const sources = collectCanvasAtoms(canvas).filter((source) =>
         source.type === type && (nodeIds === undefined || nodeIds.has(source.nodeId)));
     return new Set(sources.map(({ value }) => value));
@@ -384,12 +401,23 @@ export class EmpathyCanvasIntegration {
         }
     }
 
-    atomSources(canvas: Canvas): AtomSource[] {
+    charactersChanged(): void {
+        for (const patch of this.patches.values()) {
+            for (const [node, nodePatch] of patch.nodes) {
+                if (getEmpathyCanvasNodeKind(node.getData()) !== EmpathyCanvasNodeKind.SAY) continue;
+                nodePatch.signature = undefined;
+                this.decorateNode(patch, node);
+            }
+            this.scheduleValidation(patch);
+        }
+    }
+
+    atomSources(canvas: Canvas): OwnedAtomSource[] {
         this.patchCanvas(canvas);
         return collectCanvasAtoms(canvas);
     }
 
-    renameAtomKey(canvas: Canvas, source: AtomSource, key: string): string | undefined {
+    renameAtomKey(canvas: Canvas, source: OwnedAtomSource, key: string): string | undefined {
         if (this.patchCanvas(canvas).readonly) return "The active Canvas is read-only.";
         if (!isValidAtomKey(key)) {
             return `Use at most ${MAXIMUM_ATOM_KEY_LENGTH} lowercase ASCII letters, numbers, and underscores; start with a letter.`;
@@ -402,7 +430,7 @@ export class EmpathyCanvasIntegration {
         return undefined;
     }
 
-    generateAtomKey(canvas: Canvas, source: AtomSource): string | undefined {
+    generateAtomKey(canvas: Canvas, source: OwnedAtomSource): string | undefined {
         if (this.patchCanvas(canvas).readonly) return "The active Canvas is read-only.";
         const current = collectCanvasAtoms(canvas).find((candidate) =>
             candidate.type === source.type && candidate.value === source.value && candidate.nodeId === source.nodeId);
@@ -416,7 +444,7 @@ export class EmpathyCanvasIntegration {
         return undefined;
     }
 
-    removeAtomKey(canvas: Canvas, source: AtomSource): string | undefined {
+    removeAtomKey(canvas: Canvas, source: OwnedAtomSource): string | undefined {
         if (this.patchCanvas(canvas).readonly) return "The active Canvas is read-only.";
         const current = collectCanvasAtoms(canvas).find((candidate) =>
             candidate.type === source.type && candidate.value === source.value && candidate.nodeId === source.nodeId);
@@ -425,7 +453,7 @@ export class EmpathyCanvasIntegration {
         return undefined;
     }
 
-    goToAtomSource(canvas: Canvas, source: AtomSource): boolean {
+    goToAtomSource(canvas: Canvas, source: OwnedAtomSource): boolean {
         const runtime = this.patchCanvas(canvas);
         const node = runtime.nodes.get(source.nodeId) as RuntimeCanvasNode | undefined;
         if (!node) return false;
@@ -442,7 +470,7 @@ export class EmpathyCanvasIntegration {
         return true;
     }
 
-    private updateAtom(canvas: Canvas, source: AtomSource, atom: AuthoredAtom): boolean {
+    private updateAtom(canvas: Canvas, source: OwnedAtomSource, atom: AuthoredAtom): boolean {
         const runtime = this.patchCanvas(canvas);
         const node = runtime.nodes.get(source.nodeId) as RuntimeCanvasNode | undefined;
         if (!node || runtime.readonly) return false;
@@ -485,6 +513,32 @@ export class EmpathyCanvasIntegration {
             }
         }
         return count;
+    }
+
+    characterUsages(canvas: Canvas, atomValue: number): Array<{ nodeId: string; text: string }> {
+        const runtime = this.patchCanvas(canvas);
+        const usages: Array<{ nodeId: string; text: string }> = [];
+        for (const node of runtime.nodes.values()) {
+            const data = node.getData();
+            if (getEmpathyCanvasNodeKind(data) !== EmpathyCanvasNodeKind.SAY || data.empathyCharacterAtom !== atomValue) continue;
+            usages.push({
+                nodeId: node.id,
+                text: typeof data.text === "string" ? data.text.replace(/\r\n?/g, "\n").trim() : "",
+            });
+        }
+        return usages;
+    }
+
+    goToCharacterUsage(canvas: Canvas, atomValue: number, nodeId: string): boolean {
+        const runtime = this.patchCanvas(canvas);
+        const node = runtime.nodes.get(nodeId) as RuntimeCanvasNode | undefined;
+        if (!node || getEmpathyCanvasNodeKind(node.getData()) !== EmpathyCanvasNodeKind.SAY ||
+            node.getData().empathyCharacterAtom !== atomValue) return false;
+        runtime.selectOnly(node);
+        runtime.zoomToSelection();
+        node.nodeEl.classList.add("empathy-canvas-source-focus");
+        setTimeout(() => node.nodeEl.classList.remove("empathy-canvas-source-focus"), 1400);
+        return true;
     }
 
     patchCanvas(canvas: Canvas): RuntimeCanvas {
@@ -539,7 +593,6 @@ export class EmpathyCanvasIntegration {
             originalShowCreationMenu.call(runtime, menu, pos, size);
         };
         const wrappedSetReadonly: RuntimeCanvas["setReadonly"] = (readonly) => {
-            if (readonly) this.flushCanvasCharacterSaves(patch);
             originalSetReadonly.call(runtime, readonly);
             if (!this.disposed) {
                 this.syncToolbar(patch);
@@ -1073,6 +1126,12 @@ export class EmpathyCanvasIntegration {
 
     private nodeSignature(node: RuntimeCanvasNode, kind: EmpathyCanvasNodeKind, data: CanvasNodeData): string {
         switch (kind) {
+            case EmpathyCanvasNodeKind.SAY:
+                return JSON.stringify([
+                    kind,
+                    data.empathyCharacterAtom,
+                    ...this.ui.getCharacters().map((character) => [character.atom.value, character.atom.key, character.name]),
+                ]);
             case EmpathyCanvasNodeKind.CHOICE:
                 return JSON.stringify([kind, data.empathyChoices, ...this.outgoingRuntimeEdges(node.canvas, node).map((edge) => edge.getData().empathyChoiceAtom)]);
             case EmpathyCanvasNodeKind.SET:
@@ -1098,7 +1157,6 @@ export class EmpathyCanvasIntegration {
     private decorateNode(patch: CanvasPatch, node: RuntimeCanvasNode): void {
         const data = node.getData();
         const kind = getEmpathyCanvasNodeKind(data);
-        if (kind !== EmpathyCanvasNodeKind.SAY) this.cancelCharacterSave(patch, node);
         if (!kind) { this.clearDecoration(patch, node); return; }
         for (const known of nodeKinds) node.nodeEl.classList.remove(`empathy-canvas-node-${known}`);
         node.nodeEl.classList.add("empathy-canvas-node", `empathy-canvas-node-${kind}`);
@@ -1125,7 +1183,7 @@ export class EmpathyCanvasIntegration {
             label.textContent = nodeLabels[kind];
             title.append(symbol, label);
             header.append(title);
-            if (kind === EmpathyCanvasNodeKind.SAY) this.addCharacterControl(patch, node, header);
+            if (kind === EmpathyCanvasNodeKind.SAY) this.addCharacterControl(node, header);
             else if (kind === EmpathyCanvasNodeKind.SET) this.addSetControls(node, header, data);
             else if (kind === EmpathyCanvasNodeKind.ENTRY) {
                 this.addEntryNameControl(patch, node, header);
@@ -1139,9 +1197,7 @@ export class EmpathyCanvasIntegration {
             nodePatch.signature = signature;
         }
         if (kind === EmpathyCanvasNodeKind.SAY) {
-            const input = nodePatch.headerEl.querySelector<HTMLInputElement>(".empathy-canvas-character-input");
-            const character = typeof data.empathyCharacter === "string" ? data.empathyCharacter : "";
-            if (input && node.nodeEl.ownerDocument.activeElement !== input) input.value = character;
+            const input = nodePatch.headerEl.querySelector<HTMLInputElement>(".empathy-character-picker > input");
             if (input) input.disabled = node.canvas.readonly || node.isEditing;
         }
         if (kind === EmpathyCanvasNodeKind.ENTRY) {
@@ -1266,17 +1322,167 @@ export class EmpathyCanvasIntegration {
         };
     }
 
-    private addCharacterControl(patch: CanvasPatch, node: RuntimeCanvasNode, header: HTMLElement): void {
-        const input = header.ownerDocument.createElement("input");
-        input.className = "empathy-canvas-character-input";
-        input.type = "text";
-        input.placeholder = "Character";
-        input.value = typeof node.getData().empathyCharacter === "string" ? node.getData().empathyCharacter! : "";
-        input.addEventListener("input", () => this.updateCharacter(patch, node, input.value));
-        input.addEventListener("change", () => this.flushCharacterSave(patch, node));
-        input.addEventListener("blur", () => this.flushCharacterSave(patch, node));
-        stopCanvasEvents(input);
-        header.querySelector(".empathy-canvas-node-title")!.append(input);
+    private addCharacterControl(node: RuntimeCanvasNode, header: HTMLElement): void {
+        const document = header.ownerDocument;
+        const root = document.createElement("div");
+        root.className = "empathy-character-picker";
+        const input = document.createElement("input");
+        input.type = "search";
+        input.placeholder = "Select character…";
+        input.autocomplete = "off";
+        const popup = document.createElement("div");
+        popup.className = "empathy-character-picker-popup";
+        root.append(input);
+        stopCanvasEvents(root);
+        stopCanvasEvents(popup);
+        let committed = typeof node.getData().empathyCharacterAtom === "number"
+            ? node.getData().empathyCharacterAtom
+            : undefined;
+        let creating = false;
+        let searching = false;
+        const selectedCharacter = (): NarrativeCharacter | undefined =>
+            this.ui.getCharacters().find((character) => character.atom.value === committed);
+        const displayValue = (): string => {
+            const selected = selectedCharacter();
+            if (selected) return selected.name;
+            return committed === undefined ? "" : `⚠ Missing character #${committed}`;
+        };
+        const close = (): void => {
+            popup.classList.remove("is-open");
+            popup.remove();
+            creating = false;
+        };
+        const position = (): void => {
+            const view = document.defaultView;
+            if (!view) return;
+            const bounds = input.getBoundingClientRect();
+            const gap = 4;
+            const margin = 8;
+            const width = Math.min(Math.max(bounds.width, 240), view.innerWidth - margin * 2);
+            const below = view.innerHeight - bounds.bottom - gap - margin;
+            const above = bounds.top - gap - margin;
+            const opensAbove = below < 150 && above > below;
+            popup.style.width = `${width}px`;
+            popup.style.maxHeight = `${Math.max(110, Math.min(280, opensAbove ? above : below))}px`;
+            popup.style.left = `${Math.max(margin, Math.min(bounds.left, view.innerWidth - width - margin))}px`;
+            if (opensAbove) {
+                popup.style.top = "auto";
+                popup.style.bottom = `${view.innerHeight - bounds.top + gap}px`;
+            } else {
+                popup.style.top = `${bounds.bottom + gap}px`;
+                popup.style.bottom = "auto";
+            }
+        };
+        const selectCharacter = (atomValue: number): void => {
+            committed = atomValue;
+            input.value = selectedCharacter()?.name ?? `⚠ Missing character #${atomValue}`;
+            close();
+            this.updateCharacter(node, atomValue);
+        };
+        const render = (): void => {
+            popup.replaceChildren();
+            if (creating) {
+                const form = document.createElement("div");
+                form.className = "empathy-character-picker-create";
+                const name = document.createElement("input");
+                name.type = "text";
+                name.placeholder = "Name";
+                name.setAttribute("aria-label", "New character name");
+                const create = document.createElement("button");
+                create.type = "button";
+                create.className = "mod-cta";
+                create.textContent = "Create";
+                const error = document.createElement("small");
+                const submit = async (): Promise<void> => {
+                    if (name.value.trim().length === 0) {
+                        error.textContent = "Enter a character name.";
+                        name.focus();
+                        return;
+                    }
+                    create.disabled = true;
+                    try {
+                        const character = await this.ui.createCharacter(name.value);
+                        selectCharacter(character.atom.value);
+                    } catch (reason) {
+                        error.textContent = reason instanceof Error ? reason.message : String(reason);
+                        create.disabled = false;
+                        name.focus();
+                    }
+                };
+                create.addEventListener("click", () => void submit());
+                name.addEventListener("keydown", (event) => {
+                    if (event.key === "Enter") {
+                        event.preventDefault();
+                        void submit();
+                    }
+                });
+                form.append(name, create, error);
+                popup.append(form);
+                queueMicrotask(() => name.focus());
+                return;
+            }
+            if (committed !== undefined && !selectedCharacter()) {
+                const missing = document.createElement("div");
+                missing.className = "empathy-character-missing";
+                missing.textContent = `⚠ Missing character #${committed}`;
+                popup.append(missing);
+            }
+            for (const character of filterNarrativeCharacters(
+                this.ui.getCharacters(),
+                searching ? input.value : undefined,
+            )) {
+                const button = document.createElement("button");
+                button.type = "button";
+                const name = document.createElement("span");
+                name.textContent = character.name;
+                button.append(name);
+                if (character.atom.key) {
+                    const key = document.createElement("small");
+                    key.textContent = character.atom.key;
+                    button.append(key);
+                }
+                button.addEventListener("mousedown", (event) => event.preventDefault());
+                button.addEventListener("click", () => selectCharacter(character.atom.value));
+                popup.append(button);
+            }
+            const create = document.createElement("button");
+            create.type = "button";
+            create.className = "empathy-character-picker-new";
+            create.textContent = "+ New character";
+            create.addEventListener("mousedown", (event) => event.preventDefault());
+            create.addEventListener("click", () => {
+                creating = true;
+                render();
+            });
+            popup.append(create);
+        };
+        const open = (): void => {
+            searching = false;
+            document.body.append(popup);
+            popup.classList.add("is-open");
+            position();
+            render();
+        };
+        const restore = (): void => {
+            searching = false;
+            input.value = displayValue();
+            input.classList.toggle("is-missing", committed !== undefined && selectedCharacter() === undefined);
+            close();
+        };
+        input.addEventListener("focus", () => { input.select(); open(); });
+        input.addEventListener("input", () => { searching = true; position(); render(); });
+        input.addEventListener("keydown", (event) => {
+            if (event.key === "Escape") {
+                event.preventDefault();
+                restore();
+            }
+        });
+        root.addEventListener("focusout", () => setTimeout(() => {
+            const active = document.activeElement;
+            if (!root.contains(active) && !popup.contains(active)) restore();
+        }, 0));
+        restore();
+        header.querySelector(".empathy-canvas-node-title")!.append(root);
     }
 
     private addEntryNameControl(patch: CanvasPatch, node: RuntimeCanvasNode, header: HTMLElement): void {
@@ -1778,7 +1984,7 @@ export class EmpathyCanvasIntegration {
                 element.setAttribute("data-empathy-summary", summary);
             }
         }
-        const issues = validateCanvas(patch.canvas, this.ui.getVariables());
+        const issues = validateCanvas(patch.canvas, this.ui.getVariables(), this.ui.getCharacters());
         const nodeMessages = new Map<string, string[]>();
         const edgeMessages = new Map<string, string[]>();
         for (const issue of issues) {
@@ -2003,44 +2209,14 @@ export class EmpathyCanvasIntegration {
         patch.canvas.requestSave();
     }
 
-    private updateCharacter(patch: CanvasPatch, node: RuntimeCanvasNode, character: string): void {
+    private updateCharacter(node: RuntimeCanvasNode, characterAtom: number): void {
         if (node.canvas.readonly || node.isEditing) return;
         const data = node.getData();
         if (getEmpathyCanvasNodeKind(data) !== EmpathyCanvasNodeKind.SAY) return;
-        node.setData({ ...data, empathyCharacter: character });
+        const character = this.ui.getCharacters().find((candidate) => candidate.atom.value === characterAtom);
+        node.setData(character ? selectNarrativeCharacter(data, character) : { ...data, empathyCharacterAtom: characterAtom });
         node.canvas.markDirty(node);
-        const nodePatch = patch.nodes.get(node);
-        if (!nodePatch) return;
-        if (nodePatch.characterSaveTimer !== undefined) clearTimeout(nodePatch.characterSaveTimer);
-        nodePatch.characterSaveTimer = setTimeout(() => {
-            nodePatch.characterSaveTimer = undefined;
-            if (!node.canvas.readonly) node.canvas.requestSave();
-        }, 300);
-    }
-
-    private flushCharacterSave(patch: CanvasPatch, node: RuntimeCanvasNode): void {
-        const nodePatch = patch.nodes.get(node);
-        if (!nodePatch || nodePatch.characterSaveTimer === undefined) return;
-        clearTimeout(nodePatch.characterSaveTimer);
-        nodePatch.characterSaveTimer = undefined;
-        if (!node.canvas.readonly) node.canvas.requestSave();
-    }
-
-    private cancelCharacterSave(patch: CanvasPatch, node: RuntimeCanvasNode): void {
-        const nodePatch = patch.nodes.get(node);
-        if (nodePatch?.characterSaveTimer !== undefined) clearTimeout(nodePatch.characterSaveTimer);
-        if (nodePatch) nodePatch.characterSaveTimer = undefined;
-    }
-
-    private flushCanvasCharacterSaves(patch: CanvasPatch): void {
-        let pending = false;
-        for (const nodePatch of patch.nodes.values()) {
-            if (nodePatch.characterSaveTimer === undefined) continue;
-            clearTimeout(nodePatch.characterSaveTimer);
-            nodePatch.characterSaveTimer = undefined;
-            pending = true;
-        }
-        if (pending && !patch.canvas.readonly) patch.canvas.requestSave();
+        node.canvas.requestSave();
     }
 
     private clearDecoration(patch: CanvasPatch, node: RuntimeCanvasNode): void {
@@ -2055,7 +2231,6 @@ export class EmpathyCanvasIntegration {
     private unpatchNode(patch: CanvasPatch, node: RuntimeCanvasNode): void {
         const nodePatch = patch.nodes.get(node);
         if (!nodePatch) return;
-        this.cancelCharacterSave(patch, node);
         for (const restore of [...nodePatch.restore].reverse()) restore();
         this.clearDecoration(patch, node);
         patch.nodes.delete(node);
@@ -2071,7 +2246,6 @@ export class EmpathyCanvasIntegration {
         patch.edgeBadges.clear();
         if (patch.validationTimer !== undefined) clearTimeout(patch.validationTimer);
         if (patch.resizeSaveTimer !== undefined) clearTimeout(patch.resizeSaveTimer);
-        this.flushCanvasCharacterSaves(patch);
         for (const node of Array.from(patch.nodes.keys())) this.unpatchNode(patch, node);
         for (const restore of [...patch.restore].reverse()) restore();
         this.patches.delete(canvas);

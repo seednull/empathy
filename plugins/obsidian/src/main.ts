@@ -1,7 +1,9 @@
 import { ItemView, Notice, Plugin, setIcon, setTooltip, TFile } from "obsidian";
 
 import {
+    AtomSource,
     Canvas,
+    collectCharacterAtoms,
     compileCanvas,
     EmpathyCanvasNodeKind,
     isValidHeaderPrefix,
@@ -15,8 +17,11 @@ import {
     AtomAllocatorState,
     AuthoredAtom,
     AuthoredAtomType,
+    generatedAtomKey,
     initialAtomAllocatorState,
+    isValidAtomKey,
     isValidAtomValue,
+    MAXIMUM_ATOM_KEY_LENGTH,
 } from "./atoms";
 import {
     CanvasArtifactKind,
@@ -25,6 +30,11 @@ import {
     SystemSaveDialog,
 } from "./artifacts";
 import { EmpathyCanvasIntegration } from "./canvas";
+import {
+    createNarrativeCharacter,
+    isNarrativeCharacter,
+    NarrativeCharacter,
+} from "./characters";
 import {
     EMPATHY_PANEL_VIEW,
     EmpathyPanelView,
@@ -37,6 +47,7 @@ interface InternalCanvasView extends ItemView {
 
 interface EmpathyPluginData {
     variables: NarrativeVariable[];
+    characters: NarrativeCharacter[];
     nextAtomValue: AtomAllocatorState;
 }
 
@@ -50,6 +61,7 @@ export default class EmpathyPlugin extends Plugin {
     private exporting?: CanvasArtifactKind;
     private headerPrefix = "Canvas";
     private variables: NarrativeVariable[] = [];
+    private characters: NarrativeCharacter[] = [];
     private nextAtomValue: AtomAllocatorState = { ...initialAtomAllocatorState };
     private lastCanvasView?: InternalCanvasView;
     private dataSave: Promise<void> = Promise.resolve();
@@ -81,16 +93,27 @@ export default class EmpathyPlugin extends Plugin {
                 names.add(variable.name);
                 return true;
             });
+            const characterValues = new Set<number>();
+            const characterKeys = new Set<string>();
+            const charactersAreCurrent = Array.isArray(candidate.characters) && candidate.characters.every((character) => {
+                if (!isNarrativeCharacter(character) || characterValues.has(character.atom.value) ||
+                    (character.atom.key !== undefined && characterKeys.has(character.atom.key))) return false;
+                characterValues.add(character.atom.value);
+                if (character.atom.key !== undefined) characterKeys.add(character.atom.key);
+                return true;
+            });
             const allocator = candidate.nextAtomValue;
             const dataKeys = Object.keys(candidate);
             const allocatorKeys = allocator ? Object.keys(allocator) : [];
-            if (dataKeys.length !== 2 || !dataKeys.includes("variables") || !dataKeys.includes("nextAtomValue") ||
-                !variablesAreCurrent || !allocator || allocatorKeys.length !== 2 ||
-                !allocatorKeys.includes("line") || !allocatorKeys.includes("choice") ||
-                !isValidAtomValue(allocator.line) || !isValidAtomValue(allocator.choice)) {
+            if (dataKeys.length !== 3 || !dataKeys.includes("variables") || !dataKeys.includes("characters") ||
+                !dataKeys.includes("nextAtomValue") || !variablesAreCurrent || !charactersAreCurrent || !allocator ||
+                allocatorKeys.length !== 3 || !allocatorKeys.includes("line") || !allocatorKeys.includes("character") ||
+                !allocatorKeys.includes("choice") || !isValidAtomValue(allocator.line) ||
+                !isValidAtomValue(allocator.character) || !isValidAtomValue(allocator.choice)) {
                 throw new Error("Empathy plugin data does not match the current schema");
             }
             this.variables = [...candidate.variables!];
+            this.characters = candidate.characters!.map((character) => ({ ...character, atom: { ...character.atom } }));
             this.nextAtomValue = { ...allocator };
         }
         const withActiveCanvas = <T>(fallback: T, action: (canvas: Canvas, view: InternalCanvasView) => T): T => {
@@ -101,24 +124,30 @@ export default class EmpathyPlugin extends Plugin {
             getVariables: () => this.variables,
             setVariables: (variables) => this.setVariables(variables),
             getUsageCount: (name) => this.canvasIntegration.variableUsageCount(name),
+            getCharacters: () => this.characters,
+            createCharacter: (name) => this.createCharacter(name),
+            setCharacters: (characters) => this.setCharacters(characters),
+            getCharacterUsages: (atomValue) => withActiveCanvas(
+                [],
+                (canvas) => this.canvasIntegration.characterUsages(canvas, atomValue),
+            ),
+            goToCharacterUsage: (atomValue, nodeId) => withActiveCanvas(false, (canvas, view) => {
+                void this.app.workspace.revealLeaf(view.leaf);
+                return this.canvasIntegration.goToCharacterUsage(canvas, atomValue, nodeId);
+            }),
             getHeaderPrefix: () => this.headerPrefix,
             setHeaderPrefix: (prefix) => this.setHeaderPrefix(prefix),
             getExporting: () => this.exporting,
             exportActiveCanvas: (kind) => this.exportActiveCanvas(kind),
-            getAtomSources: () => withActiveCanvas([], (canvas) => this.canvasIntegration.atomSources(canvas)),
-            renameAtomKey: (source, key) => withActiveCanvas(
-                "No active Canvas is available.",
-                (canvas) => this.canvasIntegration.renameAtomKey(canvas, source, key),
+            getAtomSources: () => withActiveCanvas<readonly AtomSource[]>(
+                collectCharacterAtoms(this.characters),
+                (canvas) => [...this.canvasIntegration.atomSources(canvas), ...collectCharacterAtoms(this.characters, canvas)],
             ),
-            generateAtomKey: (source) => withActiveCanvas(
-                "No active Canvas is available.",
-                (canvas) => this.canvasIntegration.generateAtomKey(canvas, source),
-            ),
-            removeAtomKey: (source) => withActiveCanvas(
-                "No active Canvas is available.",
-                (canvas) => this.canvasIntegration.removeAtomKey(canvas, source),
-            ),
+            renameAtomKey: (source, key) => this.renameAtomKey(source, key),
+            generateAtomKey: (source) => this.generateAtomKey(source),
+            removeAtomKey: (source) => this.removeAtomKey(source),
             goToAtomSource: (source) => withActiveCanvas(false, (canvas, view) => {
+                if (source.owner !== "canvas") return false;
                 void this.app.workspace.revealLeaf(view.leaf);
                 return this.canvasIntegration.goToAtomSource(canvas, source);
             }),
@@ -130,6 +159,8 @@ export default class EmpathyPlugin extends Plugin {
                 new Notice(message);
             },
             getVariables: () => this.variables,
+            getCharacters: () => this.characters,
+            createCharacter: (name) => this.createCharacter(name),
             openPanel: (selectCreated) => void this.openPanel(selectCreated),
             allocateAtom: (type, usedValues) => this.allocateAtom(type, usedValues),
             atomsChanged: () => this.refreshPanels(),
@@ -215,6 +246,83 @@ export default class EmpathyPlugin extends Plugin {
         this.refreshPanels();
     }
 
+    private async setCharacters(characters: readonly NarrativeCharacter[]): Promise<void> {
+        this.characters = characters.map((character) => ({ ...character, atom: { ...character.atom } }));
+        await this.persistData();
+        this.canvasIntegration.charactersChanged();
+        this.refreshPanels();
+    }
+
+    private async createCharacter(name: string): Promise<NarrativeCharacter> {
+        const character = createNarrativeCharacter(
+            name,
+            this.characters,
+            (type, usedValues) => this.allocateAtom(type, usedValues),
+        );
+        await this.setCharacters([...this.characters, character]);
+        return character;
+    }
+
+    private renameAtomKey(source: AtomSource, key: string): string | undefined {
+        if (source.owner === "canvas") {
+            const view = this.activeCanvasView();
+            return view
+                ? this.canvasIntegration.renameAtomKey(view.canvas, source, key)
+                : "No active Canvas is available.";
+        }
+        if (!isValidAtomKey(key)) {
+            return `Use at most ${MAXIMUM_ATOM_KEY_LENGTH} lowercase ASCII letters, numbers, and underscores; start with a letter.`;
+        }
+        if (this.characters.some((character) => character.atom.value !== source.value && character.atom.key === key)) {
+            return `CHARACTER key ${key} already exists.`;
+        }
+        const index = this.characters.findIndex((character) => character.atom.value === source.value);
+        if (index < 0) return "The character definition is no longer available.";
+        const characters = [...this.characters];
+        characters[index] = { ...characters[index], atom: { value: source.value, key } };
+        void this.setCharacters(characters);
+        return undefined;
+    }
+
+    private generateAtomKey(source: AtomSource): string | undefined {
+        if (source.owner === "canvas") {
+            const view = this.activeCanvasView();
+            return view
+                ? this.canvasIntegration.generateAtomKey(view.canvas, source)
+                : "No active Canvas is available.";
+        }
+        const index = this.characters.findIndex((character) => character.atom.value === source.value);
+        if (index < 0) return "The character definition is no longer available.";
+        const usedKeys = new Set(this.characters.flatMap((character, characterIndex) =>
+            characterIndex === index || character.atom.key === undefined ? [] : [character.atom.key]));
+        const characters = [...this.characters];
+        const character = characters[index];
+        characters[index] = {
+            ...character,
+            atom: {
+                value: character.atom.value,
+                key: generatedAtomKey(AuthoredAtomType.CHARACTER, character.name, character.atom.value, usedKeys),
+            },
+        };
+        void this.setCharacters(characters);
+        return undefined;
+    }
+
+    private removeAtomKey(source: AtomSource): string | undefined {
+        if (source.owner === "canvas") {
+            const view = this.activeCanvasView();
+            return view
+                ? this.canvasIntegration.removeAtomKey(view.canvas, source)
+                : "No active Canvas is available.";
+        }
+        const index = this.characters.findIndex((character) => character.atom.value === source.value);
+        if (index < 0) return "The character definition is no longer available.";
+        const characters = [...this.characters];
+        characters[index] = { ...characters[index], atom: { value: characters[index].atom.value } };
+        void this.setCharacters(characters);
+        return undefined;
+    }
+
     private setHeaderPrefix(prefix: string): Promise<void> {
         if (!isValidHeaderPrefix(prefix)) throw new Error("invalid Empathy header prefix");
         const previousPrefix = this.headerPrefix;
@@ -232,6 +340,7 @@ export default class EmpathyPlugin extends Plugin {
     private persistData(): Promise<void> {
         const snapshot: EmpathyPluginData = {
             variables: [...this.variables],
+            characters: this.characters.map((character) => ({ ...character, atom: { ...character.atom } })),
             nextAtomValue: { ...this.nextAtomValue },
         };
         const save = (): Promise<void> => this.saveData(snapshot);
@@ -292,7 +401,7 @@ export default class EmpathyPlugin extends Plugin {
                 throw new Error("active Canvas is not backed by a .canvas file");
             }
 
-            const result = compileCanvas(view.canvas, this.variables);
+            const result = compileCanvas(view.canvas, this.variables, this.characters);
             const desktop = window as unknown as DesktopWindow;
             const outputPath = await saveCanvasArtifact(
                 desktop.electron.remote.dialog,

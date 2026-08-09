@@ -193,7 +193,7 @@
     letter-spacing: 0.08em;
 }
 
-.empathy-canvas-character-input,
+.empathy-character-picker > input,
 .empathy-canvas-entry-input,
 .empathy-canvas-portal-input,
 .empathy-canvas-portal-select {
@@ -213,7 +213,7 @@
     pointer-events: auto;
 }
 
-.empathy-canvas-character-input:focus,
+.empathy-character-picker > input:focus,
 .empathy-canvas-entry-input:focus,
 .empathy-canvas-portal-input:focus,
 .empathy-canvas-portal-select:focus {
@@ -269,7 +269,7 @@
     gap: 8px;
 }
 
-.empathy-canvas-node-title .empathy-canvas-character-input,
+.empathy-canvas-node-title .empathy-character-picker,
 .empathy-canvas-node-title .empathy-canvas-entry-input,
 .empathy-canvas-node-title .empathy-canvas-portal-input,
 .empathy-canvas-node-title .empathy-canvas-portal-select {
@@ -280,6 +280,84 @@
 .empathy-canvas-portal-input,
 .empathy-canvas-portal-select {
     width: 120px;
+}
+
+.empathy-character-picker {
+    position: relative;
+    min-width: 48px;
+    flex: 1 1 auto;
+    pointer-events: auto;
+}
+
+.empathy-character-picker > input {
+    width: 100%;
+}
+
+.empathy-character-picker > input.is-missing {
+    border-color: var(--color-red);
+    color: var(--color-red);
+}
+
+.empathy-character-picker-popup {
+    position: fixed;
+    z-index: 10000;
+    display: none;
+    padding: 5px;
+    overflow: auto;
+    border: 1px solid var(--background-modifier-border);
+    border-radius: var(--radius-m);
+    background: var(--background-primary);
+    box-shadow: var(--shadow-s);
+}
+
+.empathy-character-picker-popup.is-open {
+    display: block;
+}
+
+.empathy-character-picker-popup > button {
+    display: flex;
+    width: 100%;
+    align-items: center;
+    justify-content: space-between;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+    text-align: left;
+}
+
+.empathy-character-picker-popup > button:hover {
+    background: var(--background-modifier-hover);
+}
+
+.empathy-character-picker-popup small {
+    color: var(--text-muted);
+    font-size: var(--font-ui-smaller);
+}
+
+.empathy-character-picker-new {
+    margin-top: 5px;
+    border-top: 1px solid var(--background-modifier-border) !important;
+    color: var(--interactive-accent);
+}
+
+.empathy-character-missing {
+    padding: 5px 7px;
+    color: var(--color-red);
+}
+
+.empathy-character-picker-create {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 6px;
+}
+
+.empathy-character-picker-create > input {
+    min-width: 0;
+}
+
+.empathy-character-picker-create > small {
+    grid-column: 1 / -1;
+    color: var(--text-error);
 }
 
 .empathy-node-controls {
@@ -622,15 +700,168 @@
     margin-bottom: 13px;
 }
 
+.empathy-characters-section {
+    margin-top: 24px;
+    padding-top: 18px;
+    border-top: 1px solid var(--background-modifier-border);
+}
+
+.empathy-character-heading {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.empathy-character-heading h3,
+.empathy-character-heading p {
+    margin: 0;
+}
+
+.empathy-character-heading p {
+    margin-top: 4px;
+    color: var(--text-muted);
+    font-size: var(--font-ui-smaller);
+}
+
+.empathy-character-heading > button,
+.empathy-character-actions > button {
+    width: 28px;
+    height: 28px;
+    padding: 5px;
+}
+
+.empathy-character-row {
+    display: grid;
+    grid-template-columns: minmax(0, 0.8fr) minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 0;
+    border-top: 1px solid var(--background-modifier-border-hover);
+}
+
+.empathy-character-id,
+.empathy-character-name {
+    min-width: 0;
+    width: 100%;
+}
+
+.empathy-character-id {
+    font-family: var(--font-monospace);
+}
+
+.empathy-character-actions {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+}
+
+.empathy-character-actions svg {
+    width: 14px;
+    height: 14px;
+}
+
+.empathy-character-delete {
+    color: var(--color-red);
+}
+
+.empathy-character-error,
+.empathy-character-usages {
+    grid-column: 1 / -1;
+}
+
+.empathy-character-error {
+    color: var(--text-error);
+    font-size: var(--font-ui-smaller);
+}
+
+.empathy-character-error:empty {
+    display: none;
+}
+
+.empathy-character-row.is-invalid-id .empathy-character-id,
+.empathy-character-row.is-invalid-name .empathy-character-name {
+    border-color: var(--color-red);
+}
+
+.empathy-character-usages {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    padding: 4px 0 2px 8px;
+    border-left: 2px solid var(--interactive-accent);
+    color: var(--text-muted);
+    font-size: var(--font-ui-smaller);
+}
+
+.empathy-character-usages > button {
+    display: flex;
+    width: 100%;
+    justify-content: space-between;
+    gap: 8px;
+    border: 0;
+    background: transparent;
+    box-shadow: none;
+    color: var(--text-normal);
+    text-align: left;
+}
+
+.empathy-character-usages > button > span:first-child {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.empathy-character-new {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    gap: 6px;
+    margin-top: 7px;
+    padding: 7px;
+    border: 1px solid color-mix(in srgb, var(--interactive-accent) 40%, var(--background-modifier-border));
+    border-radius: var(--radius-s);
+    background: var(--background-secondary);
+}
+
+.empathy-character-new > small {
+    grid-column: 1 / -1;
+    color: var(--text-error);
+}
+
+.empathy-characters-empty {
+    margin-bottom: 8px;
+    padding: 9px;
+    border: 1px dashed var(--background-modifier-border);
+    border-radius: var(--radius-s);
+    color: var(--text-muted);
+    font-size: var(--font-ui-smaller);
+    text-align: center;
+}
+
 .empathy-atoms-section {
     margin-top: 24px;
     padding-top: 18px;
     border-top: 1px solid var(--background-modifier-border);
 }
 
-.empathy-atom-search {
-    width: 100%;
+.empathy-atom-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
     margin-bottom: 14px;
+}
+
+.empathy-atom-search {
+    min-width: 0;
+    flex: 1;
+}
+
+.empathy-atom-sort {
+    width: 32px;
+    height: 30px;
+    flex: 0 0 auto;
+    padding: 5px;
 }
 
 .empathy-atom-row {

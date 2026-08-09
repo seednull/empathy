@@ -10,6 +10,7 @@ import {
     isValidAtomKey,
     isValidAtomValue,
 } from "./atoms";
+import { NarrativeCharacter } from "./characters";
 
 // Deliberately small approximations of Obsidian's undocumented Canvas runtime objects.
 // These are POC/internal typings, not a supported Canvas API.
@@ -18,7 +19,7 @@ export interface CanvasNodeData {
     type?: string;
     text?: string;
     empathyKind?: string;
-    empathyCharacter?: string;
+    empathyCharacterAtom?: number;
     empathyAssignments?: NarrativeAssignment[];
     empathyEntryCondition?: NarrativeCondition;
     empathyEntryMatchValue?: string;
@@ -125,14 +126,23 @@ export interface CanvasIssue {
     edgeId?: string;
 }
 
-export interface AtomSource extends AuthoredAtom {
+export interface OwnedAtomSource extends AuthoredAtom {
+    owner: "canvas";
     type: typeof AuthoredAtomType.LINE | typeof AuthoredAtomType.CHOICE;
     text: string;
     nodeId: string;
     nodeKind: EmpathyCanvasNodeKind;
-    character?: string;
     optionAtomValue?: number;
 }
+
+export interface CharacterAtomSource extends AuthoredAtom {
+    owner: "character";
+    type: typeof AuthoredAtomType.CHARACTER;
+    text: string;
+    usageCount: number;
+}
+
+export type AtomSource = OwnedAtomSource | CharacterAtomSource;
 
 interface CompiledAuthoredAtom extends AuthoredAtom {
     text: string;
@@ -151,7 +161,7 @@ export interface CompileResult {
         name: string;
     }>;
     lines: readonly CompiledAuthoredAtom[];
-    characters: readonly string[];
+    characters: readonly CompiledAuthoredAtom[];
     choices: readonly CompiledAuthoredAtom[];
     nodeOffsets: ReadonlyMap<string, number>;
     tables: ReadonlyArray<{ name: string; index: number }>;
@@ -182,11 +192,10 @@ interface CompileState {
     nodeOffsets: Map<string, number>;
     patches: JumpPatch[];
     queue: CanvasNode[];
-    characterIds: Map<string, number>;
     lineValues: Set<number>;
     choiceValues: Set<number>;
     lines: CompiledAuthoredAtom[];
-    characters: string[];
+    characters: CompiledAuthoredAtom[];
     choices: CompiledAuthoredAtom[];
 }
 
@@ -286,22 +295,20 @@ export function isNarrativeChoice(value: unknown): value is NarrativeChoice {
         (choice.condition === undefined || isCondition(choice.condition));
 }
 
-export function collectCanvasAtoms(canvas: Canvas): AtomSource[] {
+export function collectCanvasAtoms(canvas: Canvas): OwnedAtomSource[] {
     if (!(canvas?.nodes instanceof Map)) return [];
-    const result: AtomSource[] = [];
+    const result: OwnedAtomSource[] = [];
     for (const node of canvas.nodes.values()) {
         const data = node.getData();
         const kind = getEmpathyCanvasNodeKind(data);
         if ((kind === EmpathyCanvasNodeKind.SAY || kind === EmpathyCanvasNodeKind.LINE) && isAuthoredAtom(data.empathyLineAtom)) {
             result.push({
                 ...data.empathyLineAtom,
+                owner: "canvas",
                 type: AuthoredAtomType.LINE,
                 text: typeof data.text === "string" ? data.text.replace(/\r\n?/g, "\n").trim() : "",
                 nodeId: node.id,
                 nodeKind: kind,
-                character: kind === EmpathyCanvasNodeKind.SAY && typeof data.empathyCharacter === "string"
-                    ? data.empathyCharacter.trim()
-                    : undefined,
             });
         }
         if (kind === EmpathyCanvasNodeKind.CHOICE && Array.isArray(data.empathyChoices)) {
@@ -309,6 +316,7 @@ export function collectCanvasAtoms(canvas: Canvas): AtomSource[] {
                 if (!isNarrativeChoice(value)) continue;
                 result.push({
                     ...value.atom,
+                    owner: "canvas",
                     type: AuthoredAtomType.CHOICE,
                     text: value.text.trim(),
                     nodeId: node.id,
@@ -319,6 +327,31 @@ export function collectCanvasAtoms(canvas: Canvas): AtomSource[] {
         }
     }
     return result;
+}
+
+export function characterUsageCount(canvas: Canvas, atomValue: number): number {
+    if (!(canvas?.nodes instanceof Map)) return 0;
+    let count = 0;
+    for (const node of canvas.nodes.values()) {
+        const data = node.getData();
+        if (getEmpathyCanvasNodeKind(data) === EmpathyCanvasNodeKind.SAY && data.empathyCharacterAtom === atomValue) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+export function collectCharacterAtoms(
+    characters: readonly NarrativeCharacter[],
+    canvas?: Canvas,
+): CharacterAtomSource[] {
+    return characters.map((character) => ({
+        ...character.atom,
+        owner: "character",
+        type: AuthoredAtomType.CHARACTER,
+        text: character.name,
+        usageCount: canvas ? characterUsageCount(canvas, character.atom.value) : 0,
+    }));
 }
 
 function issueForNode(issues: CanvasIssue[], node: CanvasNode, message: string): void {
@@ -363,15 +396,15 @@ function validateCondition(
 }
 
 function validateAuthoredAtoms(canvas: Canvas, issues: CanvasIssue[]): void {
-    const values = new Map<AtomSource["type"], Map<number, CanvasNode>>([
+    const values = new Map<OwnedAtomSource["type"], Map<number, CanvasNode>>([
         [AuthoredAtomType.LINE, new Map()],
         [AuthoredAtomType.CHOICE, new Map()],
     ]);
-    const keys = new Map<AtomSource["type"], Map<string, CanvasNode>>([
+    const keys = new Map<OwnedAtomSource["type"], Map<string, CanvasNode>>([
         [AuthoredAtomType.LINE, new Map()],
         [AuthoredAtomType.CHOICE, new Map()],
     ]);
-    const validate = (type: AtomSource["type"], atom: unknown, node: CanvasNode, label: string): void => {
+    const validate = (type: OwnedAtomSource["type"], atom: unknown, node: CanvasNode, label: string): void => {
         if (!atom || typeof atom !== "object") {
             issueForNode(issues, node, `${label} is missing stable ${type.toUpperCase()} atom metadata`);
             return;
@@ -432,6 +465,48 @@ function validateVariableConfiguration(variables: readonly NarrativeVariable[]):
         if (!Object.values(NarrativeVariableAccess).includes(variable.access)) {
             issues.push({ message: `Variable ${variable.name} has unsupported access ${String(variable.access)}` });
         }
+    }
+    return issues;
+}
+
+export function validateCharacterConfiguration(characters: readonly NarrativeCharacter[]): CanvasIssue[] {
+    const issues: CanvasIssue[] = [];
+    const values = new Set<number>();
+    const keys = new Set<string>();
+    for (let index = 0; index < characters.length; ++index) {
+        const character = characters[index] as Partial<NarrativeCharacter> | undefined;
+        const label = `Character ${index + 1}`;
+        if (!character || typeof character !== "object" || Array.isArray(character)) {
+            issues.push({ message: `${label} does not match the current definition schema` });
+            continue;
+        }
+        const definitionKeys = Object.keys(character);
+        if (definitionKeys.length !== 2 || !definitionKeys.includes("atom") || !definitionKeys.includes("name")) {
+            issues.push({ message: `${label} does not match the current definition schema` });
+        }
+        if (typeof character.name !== "string" || character.name.trim().length === 0) {
+            issues.push({ message: `${label} requires a non-empty name` });
+        }
+        const atom = character.atom as Partial<AuthoredAtom> | undefined;
+        if (!atom || typeof atom !== "object" || Array.isArray(atom)) {
+            issues.push({ message: `${label} is missing stable CHARACTER atom metadata` });
+            continue;
+        }
+        const atomKeys = Object.keys(atom);
+        const unsupported = atomKeys.filter((key) => key !== "value" && key !== "key");
+        if (!atomKeys.includes("value") || unsupported.length > 0) {
+            issues.push({ message: `${label} has unsupported CHARACTER atom metadata${unsupported.length > 0 ? `: ${unsupported.join(", ")}` : ""}` });
+        }
+        if (!isValidAtomValue(atom.value)) {
+            issues.push({ message: `${label} has an invalid CHARACTER atom value` });
+        } else if (values.has(atom.value)) {
+            issues.push({ message: `CHARACTER atom value ${atom.value} is duplicated` });
+        } else values.add(atom.value);
+        if (atom.key !== undefined && !isValidAtomKey(atom.key)) {
+            issues.push({ message: `${label} has an empty or invalid CHARACTER atom key` });
+        } else if (atom.key !== undefined && keys.has(atom.key)) {
+            issues.push({ message: `CHARACTER atom key ${atom.key} is duplicated` });
+        } else if (atom.key !== undefined) keys.add(atom.key);
     }
     return issues;
 }
@@ -560,8 +635,12 @@ function validatePortalReceiver(
     if (target) queue.push(target);
 }
 
-export function validateCanvas(canvas: Canvas, variables: readonly NarrativeVariable[] = []): CanvasIssue[] {
-    const issues = validateVariableConfiguration(variables);
+export function validateCanvas(
+    canvas: Canvas,
+    variables: readonly NarrativeVariable[] = [],
+    characters: readonly NarrativeCharacter[] = [],
+): CanvasIssue[] {
+    const issues = [...validateVariableConfiguration(variables), ...validateCharacterConfiguration(characters)];
     if (!(canvas?.nodes instanceof Map) || !(canvas?.edges instanceof Map)) {
         return [...issues, { message: "Active Canvas runtime does not expose nodes and edges maps" }];
     }
@@ -571,6 +650,20 @@ export function validateCanvas(canvas: Canvas, variables: readonly NarrativeVari
         }
     }
     validateAuthoredAtoms(canvas, issues);
+    const characterValues = new Set(characters.flatMap((character) =>
+        isValidAtomValue(character?.atom?.value) ? [character.atom.value] : []));
+    for (const node of canvas.nodes.values()) {
+        const data = node.getData();
+        if (getEmpathyCanvasNodeKind(data) !== EmpathyCanvasNodeKind.SAY) continue;
+        if (Object.prototype.hasOwnProperty.call(data, "empathyCharacter")) {
+            issueForNode(issues, node, "Obsolete empathyCharacter metadata is not supported");
+        }
+        if (!isValidAtomValue(data.empathyCharacterAtom)) {
+            issueForNode(issues, node, "SAY is missing a valid CHARACTER atom reference");
+        } else if (!characterValues.has(data.empathyCharacterAtom)) {
+            issueForNode(issues, node, `SAY references missing CHARACTER atom ${data.empathyCharacterAtom}`);
+        }
+    }
     const variableMap = new Map(variables.map((variable) => [variable.name, variable]));
     const entries = Array.from(canvas.nodes.values())
         .filter((node) => getEmpathyCanvasNodeKind(node.getData()) === EmpathyCanvasNodeKind.ENTRY)
@@ -622,9 +715,8 @@ export function validateCanvas(canvas: Canvas, variables: readonly NarrativeVari
             continue;
         }
         if (kind === EmpathyCanvasNodeKind.SAY) {
-            if (typeof data.empathyCharacter !== "string" || data.empathyCharacter.trim().length === 0 ||
-                typeof data.text !== "string" || data.text.trim().length === 0) {
-                issueForNode(issues, node, "SAY requires a non-empty character and dialogue");
+            if (typeof data.text !== "string" || data.text.trim().length === 0) {
+                issueForNode(issues, node, "SAY requires non-empty dialogue");
             }
             validateContinuation(canvas, node, "SAY", variableMap, issues, queue);
         } else if (kind === EmpathyCanvasNodeKind.LINE) {
@@ -762,15 +854,6 @@ function deriveParameters(variables: readonly NarrativeVariable[]): {
     return { tables, parameters };
 }
 
-function internCharacter(value: string, values: string[], ids: Map<string, number>): number {
-    const existing = ids.get(value);
-    if (existing !== undefined) return existing;
-    const id = values.length;
-    values.push(value);
-    ids.set(value, id);
-    return id;
-}
-
 function registerAuthoredAtom(atom: AuthoredAtom, text: string, values: CompiledAuthoredAtom[], seen: Set<number>): void {
     if (seen.has(atom.value)) return;
     seen.add(atom.value);
@@ -852,14 +935,12 @@ function emitTransitions(state: CompileState, node: CanvasNode): void {
 function compileSay(state: CompileState, node: CanvasNode): void {
     const data = node.getData();
     const line = normalizedNodeText(node);
-    const character = (data.empathyCharacter as string).trim();
     const lineAtom = data.empathyLineAtom!;
     registerAuthoredAtom(lineAtom, line, state.lines, state.lineValues);
-    const characterId = internCharacter(character, state.characters, state.characterIds);
     state.writer.u8(EmpathyBytecodeOpcode.YIELD_PUSH_ATOM);
     state.writer.atom(EmpathyPocAtomType.LINE, lineAtom.value);
     state.writer.u8(EmpathyBytecodeOpcode.YIELD_PUSH_ATOM);
-    state.writer.atom(EmpathyPocAtomType.CHARACTER, characterId);
+    state.writer.atom(EmpathyPocAtomType.CHARACTER, data.empathyCharacterAtom!);
     state.writer.u8(EmpathyBytecodeOpcode.YIELD);
     state.writer.u32(EmpathyPocYieldType.SAY);
     emitTransitions(state, node);
@@ -985,8 +1066,12 @@ class CanvasValidationError extends Error {
     }
 }
 
-export function compileCanvas(canvas: Canvas, variables: readonly NarrativeVariable[] = []): CompileResult {
-    const issues = validateCanvas(canvas, variables);
+export function compileCanvas(
+    canvas: Canvas,
+    variables: readonly NarrativeVariable[] = [],
+    characters: readonly NarrativeCharacter[] = [],
+): CompileResult {
+    const issues = validateCanvas(canvas, variables, characters);
     if (issues.length > 0) throw new CanvasValidationError(issues);
     const { tables, parameters } = deriveParameters(variables);
     const entries = Array.from(canvas.nodes.values())
@@ -999,11 +1084,11 @@ export function compileCanvas(canvas: Canvas, variables: readonly NarrativeVaria
         nodeOffsets: new Map(),
         patches: [],
         queue: [],
-        characterIds: new Map(),
         lineValues: new Set(),
         choiceValues: new Set(),
         lines: [],
-        characters: [],
+        characters: characters.map((character) => ({ ...character.atom, text: character.name }))
+            .sort((left, right) => left.value - right.value),
         choices: [],
     };
     const entryTargets = entries.map((entry) => queueTarget(state, outgoingEdges(canvas, entry)[0], entry));
@@ -1109,15 +1194,6 @@ function uniqueName(base: string, used: Set<string>): string {
     return result;
 }
 
-function stringTable(symbol: string, values: readonly string[]): string[] {
-    return [
-        `static const char *const ${symbol}[] =`,
-        "{",
-        ...(values.length > 0 ? values.map((value) => `    ${escapeCStringUtf8(value)},`) : ["    0,"]),
-        "};",
-    ];
-}
-
 function authoredAtomTable(
     typeName: string,
     symbol: string,
@@ -1145,10 +1221,6 @@ function enumDefinition(typeName: string, values: readonly (readonly [name: stri
     ];
 }
 
-function atomRange(count: number): { min: number; max: number } {
-    return count === 0 ? { min: 1, max: 0 } : { min: 0, max: count - 1 };
-}
-
 function authoredAtomRange(values: readonly CompiledAuthoredAtom[]): { min: number; max: number } {
     if (values.length === 0) return { min: 1, max: 0 };
     return {
@@ -1159,7 +1231,7 @@ function authoredAtomRange(values: readonly CompiledAuthoredAtom[]): { min: numb
 
 function authoredAtomConstants(
     prefix: string,
-    kind: "LINE" | "CHOICE",
+    kind: "LINE" | "CHARACTER" | "CHOICE",
     values: readonly CompiledAuthoredAtom[],
 ): Map<number, string> {
     return new Map(values.map((atom) => [
@@ -1175,7 +1247,7 @@ export function generateHeader(result: CompileResult, prefix: string): string {
     const uppercasePrefix = prefix.toUpperCase();
     const variablePrefix = prefix.toLowerCase();
     const lineRange = authoredAtomRange(result.lines);
-    const characterRange = atomRange(result.characters.length);
+    const characterRange = authoredAtomRange(result.characters);
     const choiceRange = authoredAtomRange(result.choices);
     const usedTypes = new Set<string>();
     const tableTypes = new Map(result.tables.map((table) => [
@@ -1192,7 +1264,7 @@ export function generateHeader(result: CompileResult, prefix: string): string {
     const fields = new Map<string, string>();
     const fieldsByTable = new Map<string, Set<string>>();
     const lineConstants = authoredAtomConstants(uppercasePrefix, "LINE", result.lines);
-    const characterConstants = new Map(result.characters.map((_, id) => [id, `${uppercasePrefix}_CHARACTER_${id}`]));
+    const characterConstants = authoredAtomConstants(uppercasePrefix, "CHARACTER", result.characters);
     const choiceConstants = authoredAtomConstants(uppercasePrefix, "CHOICE", result.choices);
     for (const parameter of result.parameters) {
         const tableFields = fieldsByTable.get(parameter.tableName) ?? new Set<string>();
@@ -1260,7 +1332,7 @@ export function generateHeader(result: CompileResult, prefix: string): string {
     }
     lines.push(
         ...enumDefinition(`${prefix}_LineAtom`, result.lines.map((atom) => [lineConstants.get(atom.value)!, atom.value] as const)),
-        ...enumDefinition(`${prefix}_CharacterAtom`, result.characters.map((_, id) => [characterConstants.get(id)!, id] as const)),
+        ...enumDefinition(`${prefix}_CharacterAtom`, result.characters.map((atom) => [characterConstants.get(atom.value)!, atom.value] as const)),
         ...enumDefinition(`${prefix}_ChoiceAtom`, result.choices.map((atom) => [choiceConstants.get(atom.value)!, atom.value] as const)),
         `typedef struct ${prefix}_AtomText_t`,
         "{",
@@ -1280,7 +1352,7 @@ export function generateHeader(result: CompileResult, prefix: string): string {
     lines.push(
         ...authoredAtomTable(`${prefix}_AtomText`, `${variablePrefix}_line_atoms`, result.lines, lineConstants),
         "",
-        ...stringTable(`${variablePrefix}_character_strings`, result.characters),
+        ...authoredAtomTable(`${prefix}_AtomText`, `${variablePrefix}_character_atoms`, result.characters, characterConstants),
         "",
         ...authoredAtomTable(`${prefix}_AtomText`, `${variablePrefix}_choice_atoms`, result.choices, choiceConstants),
         "",

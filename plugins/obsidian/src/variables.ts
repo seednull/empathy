@@ -2,6 +2,7 @@ import { ItemView, Modal, Notice, setIcon, WorkspaceLeaf } from "obsidian";
 
 import {
     AtomSource,
+    CharacterAtomSource,
     isValidHeaderPrefix,
     NarrativeVariable,
     NarrativeVariableAccess,
@@ -9,6 +10,10 @@ import {
     parseVariableName,
 } from "./compile";
 import { CanvasArtifactKind } from "./artifacts";
+import { NarrativeCharacter } from "./characters";
+
+type CanvasAtomSource = Extract<AtomSource, { owner: "canvas" }>;
+type CanvasAtomType = CanvasAtomSource["type"];
 
 export const EMPATHY_PANEL_VIEW = "empathy-panel";
 
@@ -27,6 +32,11 @@ interface EmpathyPanelHost {
     getVariables(): readonly NarrativeVariable[];
     setVariables(variables: readonly NarrativeVariable[]): Promise<void>;
     getUsageCount(name: string): number;
+    getCharacters(): readonly NarrativeCharacter[];
+    createCharacter(name: string): Promise<NarrativeCharacter>;
+    setCharacters(characters: readonly NarrativeCharacter[]): Promise<void>;
+    getCharacterUsages(atomValue: number): ReadonlyArray<{ nodeId: string; text: string }>;
+    goToCharacterUsage(atomValue: number, nodeId: string): boolean;
     getHeaderPrefix(): string;
     setHeaderPrefix(prefix: string): Promise<void>;
     getExporting(): CanvasArtifactKind | undefined;
@@ -41,7 +51,10 @@ interface EmpathyPanelHost {
 export class EmpathyPanelView extends ItemView {
     private selectCreated?: (variable: NarrativeVariable) => void;
     private creatingFor?: string | null;
-    private atomQuery = "";
+    private creatingCharacter = false;
+    private expandedCharacter?: number;
+    private readonly atomQueries: Record<CanvasAtomType, string> = { line: "", choice: "" };
+    private readonly atomOrder: Record<CanvasAtomType, string[]> = { line: [], choice: [] };
 
     constructor(leaf: WorkspaceLeaf, private readonly host: EmpathyPanelHost) {
         super(leaf);
@@ -97,9 +110,20 @@ export class EmpathyPanelView extends ItemView {
     }
 
     private render(): void {
+        const scrollTop = this.contentEl.scrollTop;
         this.contentEl.replaceChildren();
         this.contentEl.className = "view-content empathy-panel-view";
-        this.contentEl.append(this.panelHeader(), this.variablesSection(), this.atomsSection());
+        this.contentEl.append(
+            this.panelHeader(),
+            this.variablesSection(),
+            this.charactersSection(),
+            this.atomSection("line", "Lines"),
+            this.atomSection("choice", "Choices"),
+        );
+        this.contentEl.scrollTop = scrollTop;
+        queueMicrotask(() => {
+            if (this.containerEl.isConnected) this.contentEl.scrollTop = scrollTop;
+        });
     }
 
     private panelHeader(): HTMLElement {
@@ -173,7 +197,8 @@ export class EmpathyPanelView extends ItemView {
         const exporting = this.host.getExporting();
         const startExport = async (kind: CanvasArtifactKind): Promise<void> => {
             const activeElement = document.activeElement;
-            if (activeElement?.classList.contains("empathy-atom-id")) {
+            if (activeElement?.classList.contains("empathy-atom-id") ||
+                activeElement?.classList.contains("empathy-character-id")) {
                 const atomId = activeElement as HTMLInputElement;
                 atomId.blur();
                 if (!atomId.checkValidity()) {
@@ -262,63 +287,371 @@ export class EmpathyPanelView extends ItemView {
         return section;
     }
 
-    private atomsSection(): HTMLElement {
+    private charactersSection(): HTMLElement {
+        const document = this.contentEl.ownerDocument;
+        const section = document.createElement("section");
+        section.className = "empathy-characters-section";
+        const heading = document.createElement("div");
+        heading.className = "empathy-panel-section-heading empathy-character-heading";
+        const copy = document.createElement("div");
+        const title = document.createElement("h3");
+        title.textContent = "Characters";
+        const intro = document.createElement("p");
+        intro.textContent = "Shared definitions referenced by stable CHARACTER atoms.";
+        copy.append(title, intro);
+        const add = document.createElement("button");
+        add.type = "button";
+        add.title = "Add character";
+        add.setAttribute("aria-label", "Add character");
+        setIcon(add, "plus");
+        add.addEventListener("click", () => {
+            this.creatingCharacter = true;
+            this.render();
+            this.contentEl.querySelector<HTMLInputElement>(".empathy-character-new-name")?.focus();
+        });
+        heading.append(copy, add);
+        section.append(heading);
+
+        const characters = this.host.getCharacters();
+        if (characters.length === 0 && !this.creatingCharacter) {
+            const empty = document.createElement("div");
+            empty.className = "empathy-characters-empty";
+            empty.textContent = "No characters yet";
+            section.append(empty);
+        }
+        for (const character of characters) section.append(this.characterRow(character));
+        if (this.creatingCharacter || characters.length === 0) section.append(this.newCharacterForm());
+        return section;
+    }
+
+    private characterRow(character: NarrativeCharacter): HTMLElement {
+        const document = this.contentEl.ownerDocument;
+        const row = document.createElement("article");
+        row.className = "empathy-character-row";
+        const usages = this.host.getCharacterUsages(character.atom.value);
+        const source: CharacterAtomSource = {
+            ...character.atom,
+            owner: "character",
+            type: "character",
+            text: character.name,
+            usageCount: usages.length,
+        };
+        const keyInput = document.createElement("input");
+        keyInput.type = "text";
+        keyInput.className = "empathy-character-id";
+        keyInput.value = character.atom.key ?? "";
+        keyInput.placeholder = "Human-readable ID";
+        keyInput.spellcheck = false;
+        keyInput.setAttribute("aria-label", `Human-readable ID for ${character.name}`);
+        const name = document.createElement("input");
+        name.type = "text";
+        name.className = "empathy-character-name";
+        name.value = character.name;
+        name.placeholder = "Display value";
+        name.setAttribute("aria-label", `Display name for character ${character.atom.value}`);
+        const actions = document.createElement("div");
+        actions.className = "empathy-character-actions";
+        const error = document.createElement("div");
+        error.className = "empathy-character-error";
+        let keyError = "";
+        let nameError = "";
+        const updateError = (): void => {
+            error.textContent = keyError || nameError;
+            row.classList.toggle("is-invalid-id", keyError.length > 0);
+            row.classList.toggle("is-invalid-name", nameError.length > 0);
+        };
+        const commitKey = (): string | undefined => {
+            const currentKey = character.atom.key ?? "";
+            if (keyInput.value === currentKey) {
+                keyError = "";
+                updateError();
+                return undefined;
+            }
+            const message = keyInput.value === ""
+                ? this.host.removeAtomKey(source)
+                : this.host.renameAtomKey(source, keyInput.value);
+            keyError = message ?? "";
+            updateError();
+            if (message) new Notice(message);
+            return message;
+        };
+        const commitName = async (): Promise<void> => {
+            const nextName = name.value.trim();
+            if (nextName.length === 0) {
+                nameError = "Character display value cannot be empty.";
+                updateError();
+                name.focus();
+                return;
+            }
+            nameError = "";
+            updateError();
+            if (nextName === character.name) return;
+            await this.host.setCharacters(this.host.getCharacters().map((candidate) =>
+                candidate.atom.value === character.atom.value ? { ...candidate, name: nextName } : candidate));
+        };
+        keyInput.addEventListener("change", commitKey);
+        keyInput.addEventListener("keydown", (event) => {
+            if (event.key === "Enter") {
+                event.preventDefault();
+                keyInput.blur();
+            } else if (event.key === "Escape") {
+                keyInput.value = character.atom.key ?? "";
+                keyError = "";
+                updateError();
+                keyInput.blur();
+            }
+        });
+        name.addEventListener("change", () => void commitName());
+        name.addEventListener("keydown", (event) => {
+            if (event.key === "Enter") {
+                event.preventDefault();
+                name.blur();
+            } else if (event.key === "Escape") {
+                name.value = character.name;
+                nameError = "";
+                updateError();
+                name.blur();
+            }
+        });
+        const action = (
+            icon: string,
+            title: string,
+            activate: () => void,
+            disabled = false,
+            className?: string,
+        ): HTMLButtonElement => {
+            const button = document.createElement("button");
+            button.type = "button";
+            button.title = title;
+            button.setAttribute("aria-label", `${title} for ${character.name}`);
+            button.disabled = disabled;
+            if (className) button.className = className;
+            setIcon(button, icon);
+            button.addEventListener("mousedown", (event) => event.preventDefault());
+            if (!disabled) button.addEventListener("click", activate);
+            return button;
+        };
+        actions.append(
+            action("refresh-cw", character.atom.key === undefined
+                ? "Generate ID from display value"
+                : "Regenerate ID from display value", () => {
+                const message = this.host.generateAtomKey(source);
+                if (message) new Notice(message);
+            }),
+            action("unlink", "Remove ID", () => {
+                const message = this.host.removeAtomKey(source);
+                if (message) new Notice(message);
+            }, character.atom.key === undefined),
+            action("users", `${this.expandedCharacter === character.atom.value ? "Hide" : "Show"} usages (${usages.length})`, () => {
+                if (commitKey()) return;
+                this.expandedCharacter = this.expandedCharacter === character.atom.value ? undefined : character.atom.value;
+                this.render();
+            }),
+            action("trash-2", "Delete character", () => void this.deleteCharacter(character, usages.length), false, "empathy-character-delete"),
+        );
+        row.append(keyInput, name, actions, error);
+        if (this.expandedCharacter === character.atom.value) row.append(this.characterUsageList(character.atom.value));
+        return row;
+    }
+
+    private characterUsageList(atomValue: number): HTMLElement {
+        const document = this.contentEl.ownerDocument;
+        const list = document.createElement("div");
+        list.className = "empathy-character-usages";
+        const usages = this.host.getCharacterUsages(atomValue);
+        if (usages.length === 0) {
+            const empty = document.createElement("div");
+            empty.textContent = "No usages in the active Canvas";
+            list.append(empty);
+            return list;
+        }
+        for (const usage of usages) {
+            const button = document.createElement("button");
+            button.type = "button";
+            button.title = "Go to usage";
+            const text = document.createElement("span");
+            text.textContent = `SAY “${usage.text || "(empty dialogue)"}”`;
+            const arrow = document.createElement("span");
+            arrow.textContent = "↗";
+            button.append(text, arrow);
+            button.addEventListener("click", () => {
+                if (!this.host.goToCharacterUsage(atomValue, usage.nodeId)) {
+                    new Notice("The character usage is no longer available.");
+                }
+            });
+            list.append(button);
+        }
+        return list;
+    }
+
+    private newCharacterForm(): HTMLElement {
+        const document = this.contentEl.ownerDocument;
+        const form = document.createElement("div");
+        form.className = "empathy-character-new";
+        const name = document.createElement("input");
+        name.type = "text";
+        name.className = "empathy-character-new-name";
+        name.placeholder = "Name";
+        name.setAttribute("aria-label", "New character name");
+        const create = document.createElement("button");
+        create.type = "button";
+        create.className = "mod-cta";
+        create.textContent = "Create";
+        const cancel = document.createElement("button");
+        cancel.type = "button";
+        cancel.textContent = "Cancel";
+        cancel.hidden = this.host.getCharacters().length === 0;
+        const error = document.createElement("small");
+        const submit = async (): Promise<void> => {
+            const characterName = name.value.trim();
+            if (characterName.length === 0) {
+                error.textContent = "Enter a character name.";
+                name.focus();
+                return;
+            }
+            error.textContent = "";
+            create.disabled = true;
+            this.creatingCharacter = false;
+            try {
+                await this.host.createCharacter(characterName);
+            } catch (reason) {
+                this.creatingCharacter = true;
+                error.textContent = reason instanceof Error ? reason.message : String(reason);
+                create.disabled = false;
+            }
+        };
+        create.addEventListener("click", () => void submit());
+        cancel.addEventListener("click", () => {
+            this.creatingCharacter = false;
+            this.render();
+        });
+        name.addEventListener("keydown", (event) => {
+            if (event.key === "Enter") {
+                event.preventDefault();
+                void submit();
+            }
+        });
+        form.append(name, create, cancel, error);
+        return form;
+    }
+
+    private async deleteCharacter(character: NarrativeCharacter, usages: number): Promise<void> {
+        const confirmed = await new Promise<boolean>((resolve) => {
+            const modal = new Modal(this.app);
+            let accepted = false;
+            modal.titleEl.textContent = "Delete character?";
+            const copy = modal.contentEl.createDiv({ cls: "empathy-variable-confirm-copy" });
+            copy.createEl("p", { text: `Delete “${character.name}”?` });
+            if (usages > 0) copy.createEl("p", {
+                text: `It is used by ${usages} SAY node${usages === 1 ? "" : "s"}. Those numeric references will remain missing and compilation will fail until fixed.`,
+            });
+            const actions = modal.contentEl.createDiv({ cls: "empathy-modal-actions" });
+            const cancel = actions.createEl("button", { text: "Cancel" });
+            const remove = actions.createEl("button", { cls: "mod-warning empathy-variable-confirm-delete", text: "Delete character" });
+            cancel.addEventListener("click", () => modal.close());
+            remove.addEventListener("click", () => { accepted = true; modal.close(); });
+            modal.onClose = () => {
+                modal.contentEl.replaceChildren();
+                resolve(accepted);
+            };
+            modal.open();
+        });
+        if (!confirmed) return;
+        await this.host.setCharacters(this.host.getCharacters().filter((candidate) => candidate.atom.value !== character.atom.value));
+    }
+
+    private atomIdentity(source: CanvasAtomSource): string {
+        return `${source.type}:${source.nodeId}:${source.value}`;
+    }
+
+    private atomDisplayId(source: CanvasAtomSource): string {
+        return source.key ?? `${source.nodeKind}_${source.value}`;
+    }
+
+    private orderedAtomSources(type: CanvasAtomType): CanvasAtomSource[] {
+        const sources = this.host.getAtomSources().filter((source): source is CanvasAtomSource =>
+            source.owner === "canvas" && source.type === type);
+        const byIdentity = new Map(sources.map((source) => [this.atomIdentity(source), source]));
+        const order = this.atomOrder[type].filter((identity) => byIdentity.has(identity));
+        const known = new Set(order);
+        for (const source of sources) {
+            const identity = this.atomIdentity(source);
+            if (!known.has(identity)) {
+                order.push(identity);
+                known.add(identity);
+            }
+        }
+        this.atomOrder[type] = order;
+        return order.map((identity) => byIdentity.get(identity)!);
+    }
+
+    private atomSection(type: CanvasAtomType, label: "Lines" | "Choices"): HTMLElement {
         const document = this.contentEl.ownerDocument;
         const section = document.createElement("section");
         section.className = "empathy-atoms-section";
         const heading = document.createElement("div");
         heading.className = "empathy-panel-section-heading";
         const title = document.createElement("h3");
-        title.textContent = "Atoms";
+        title.textContent = label;
         const intro = document.createElement("p");
         intro.textContent = "Optional project IDs for authored text in the active Canvas.";
         heading.append(title, intro);
+        const toolbar = document.createElement("div");
+        toolbar.className = "empathy-atom-toolbar";
         const search = document.createElement("input");
         search.type = "search";
         search.className = "empathy-atom-search";
         search.placeholder = "Search ID or text…";
-        search.setAttribute("aria-label", "Search atoms by ID, character, or authored text");
-        search.value = this.atomQuery;
-        section.append(heading, search);
+        search.setAttribute("aria-label", `Search ${label.toLowerCase()} by ID or authored text`);
+        search.value = this.atomQueries[type];
+        const sort = document.createElement("button");
+        sort.type = "button";
+        sort.className = "empathy-atom-sort";
+        sort.title = `Sort ${label.toLowerCase()} lexicographically`;
+        sort.setAttribute("aria-label", sort.title);
+        setIcon(sort, "arrow-down-a-z");
+        toolbar.append(search, sort);
+        section.append(heading, toolbar);
         const results = document.createElement("div");
         section.append(results);
         const renderResults = (): void => {
-            this.atomQuery = search.value;
+            this.atomQueries[type] = search.value;
             results.replaceChildren();
-            const query = this.atomQuery.trim().toLowerCase();
-            const atoms = [...this.host.getAtomSources()].filter((source) => {
-                const id = source.key ?? `${source.nodeKind}_${source.value}`;
-                return !query || id.includes(query) || source.text.toLowerCase().includes(query) ||
-                    source.character?.toLowerCase().includes(query);
-            }).sort((left, right) => {
-                const leftId = left.key ?? `${left.nodeKind}_${left.value}`;
-                const rightId = right.key ?? `${right.nodeKind}_${right.value}`;
-                if (leftId !== rightId) return leftId < rightId ? -1 : 1;
-                if (left.type !== right.type) return left.type < right.type ? -1 : 1;
-                if (left.value !== right.value) return left.value - right.value;
-                return left.nodeId < right.nodeId ? -1 : left.nodeId > right.nodeId ? 1 : 0;
+            const query = this.atomQueries[type].trim().toLowerCase();
+            const atoms = this.orderedAtomSources(type).filter((source) => {
+                const id = this.atomDisplayId(source).toLowerCase();
+                return !query || id.includes(query) || source.text.toLowerCase().includes(query);
             });
             if (atoms.length === 0) {
                 const empty = document.createElement("div");
                 empty.className = "empathy-atoms-empty";
-                empty.textContent = query ? "No matching atoms" : "No authored LINE or CHOICE atoms in the active Canvas";
+                empty.textContent = query ? "No matching atoms" : `No ${label.toLowerCase()} in the active Canvas`;
                 results.append(empty);
                 return;
             }
             results.append(...atoms.map((source) => this.atomRow(source)));
         };
         search.addEventListener("input", renderResults);
+        sort.addEventListener("click", () => {
+            const atoms = this.orderedAtomSources(type).sort((left, right) => {
+                const byId = this.atomDisplayId(left).localeCompare(this.atomDisplayId(right), "en");
+                if (byId !== 0) return byId;
+                return left.value - right.value;
+            });
+            this.atomOrder[type] = atoms.map((source) => this.atomIdentity(source));
+            renderResults();
+        });
         renderResults();
         return section;
     }
 
-    private atomRow(source: AtomSource): HTMLElement {
+    private atomRow(source: CanvasAtomSource): HTMLElement {
         const document = this.contentEl.ownerDocument;
         const row = document.createElement("article");
         row.className = "empathy-atom-row";
-        const sourceDescription = source.character ? `${source.character}: ${source.text}` : source.text;
-        const rowIdentity = `${source.type}:${source.nodeId}:${source.value}`;
-        const stubId = `${source.nodeKind}_${source.value}`;
+        const sourceDescription = source.text;
+        const rowIdentity = this.atomIdentity(source);
+        const stubId = this.atomDisplayId({ ...source, key: undefined });
         row.dataset.empathyAtomIdentity = rowIdentity;
         row.setAttribute("aria-label", `Atom for ${sourceDescription}`);
         const keyInput = document.createElement("input");
@@ -333,11 +666,11 @@ export class EmpathyPanelView extends ItemView {
         keyInput.setAttribute("aria-label", inputLabel);
         const text = document.createElement("div");
         text.className = "empathy-atom-text";
-        text.textContent = source.character ? `${source.character}: “${source.text}”` : `“${source.text}”`;
+        text.textContent = `“${source.text}”`;
         text.title = text.textContent;
         const actions = document.createElement("div");
         actions.className = "empathy-atom-actions";
-        type AtomControl = "id" | "generate" | "source";
+        type AtomControl = "id" | "generate" | "remove" | "source";
         type FocusTarget = { atomIdentity: string; control: AtomControl } | { controlIndex: number };
         const panelControls = (): HTMLElement[] => Array.from(this.contentEl.querySelectorAll<HTMLElement>(
             "input:not([disabled]), select:not([disabled]), button:not([disabled]), [tabindex]:not([tabindex=\"-1\"])",
@@ -393,15 +726,17 @@ export class EmpathyPanelView extends ItemView {
             icon: string,
             title: string,
             activate: () => void,
+            disabled = false,
         ): HTMLButtonElement => {
             const button = document.createElement("button");
             button.type = "button";
             button.title = title;
             button.dataset.empathyAtomAction = name;
+            button.disabled = disabled;
             button.setAttribute("aria-label", `${title} for ${sourceDescription}`);
             setIcon(button, icon);
             button.addEventListener("mousedown", (event) => event.preventDefault());
-            button.addEventListener("click", activate);
+            if (!disabled) button.addEventListener("click", activate);
             return button;
         };
         let focusAfterCommit: FocusTarget | undefined;
@@ -434,6 +769,11 @@ export class EmpathyPanelView extends ItemView {
                 if (message) new Notice(message);
                 else restoreFocus({ atomIdentity: rowIdentity, control: "generate" });
             }),
+            action("remove", "unlink", "Remove ID", () => {
+                const message = this.host.removeAtomKey(source);
+                if (message) new Notice(message);
+                else restoreFocus({ atomIdentity: rowIdentity, control: "remove" });
+            }, source.key === undefined),
             action("source", "locate-fixed", "Go to source", () => {
                 if (commitKey()) return;
                 if (!this.host.goToAtomSource(source)) new Notice("The atom source is no longer available.");

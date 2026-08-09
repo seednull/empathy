@@ -1,5 +1,6 @@
 export const AuthoredAtomType = {
     LINE: "line",
+    CHARACTER: "character",
     CHOICE: "choice",
 } as const;
 
@@ -14,6 +15,7 @@ export type AtomAllocatorState = Record<AuthoredAtomType, number>;
 
 export const initialAtomAllocatorState: AtomAllocatorState = {
     line: 0,
+    character: 0,
     choice: 0,
 };
 

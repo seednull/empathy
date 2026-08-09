@@ -9,9 +9,11 @@ import {
 import {
     convertedEmpathyNodeData,
     EmpathyCanvasIntegration,
+    filterNarrativeCharacters,
     formatChoiceBadge,
     formatTransitionBadge,
     repairDuplicatedNodeAtoms,
+    selectNarrativeCharacter,
 } from "./canvas";
 import {
     allocateAuthoredAtom,
@@ -22,11 +24,17 @@ import {
     MAXIMUM_ATOM_KEY_LENGTH,
 } from "./atoms";
 import {
+    createNarrativeCharacter,
+    NarrativeCharacter,
+} from "./characters";
+import {
     Canvas,
     CanvasEdge,
     CanvasEdgeData,
     CanvasNode,
     CanvasNodeData,
+    characterUsageCount,
+    collectCharacterAtoms,
     collectCanvasAtoms,
     compileCanvas,
     EmpathyCanvasNodeKind,
@@ -39,6 +47,7 @@ import {
     NarrativeVariable,
     parseVariableName,
     validateCanvas,
+    validateCharacterConfiguration,
 } from "./compile";
 
 class MockNode implements CanvasNode {
@@ -131,6 +140,8 @@ const variables: NarrativeVariable[] = [
     { name: "quest.stage", type: "integer", access: "read-write" },
 ];
 
+const mara: NarrativeCharacter = { atom: { value: 12, key: "chr_mara" }, name: "Мара" };
+
 interface Instruction { offset: number; opcode: number; size: number }
 
 function decode(bytecode: Uint8Array): Instruction[] {
@@ -162,6 +173,14 @@ function assertJumpTargetsOnInstructionBoundaries(bytecode: Uint8Array): void {
         const target = Number(view(bytecode).getBigUint64(instruction.offset + 1, true));
         assert.ok(boundaries.has(target), `jump at ${instruction.offset} targets non-instruction byte ${target}`);
     }
+}
+
+function yieldedAtomValues(bytecode: Uint8Array, atomType: number): number[] {
+    return decode(bytecode).flatMap((instruction) => {
+        if (instruction.opcode !== EmpathyBytecodeOpcode.YIELD_PUSH_ATOM ||
+            view(bytecode).getUint32(instruction.offset + 1, true) !== atomType) return [];
+        return [view(bytecode).getUint32(instruction.offset + 5, true)];
+    });
 }
 
 interface ChoiceDispatchResult {
@@ -690,14 +709,17 @@ test("rejects obsolete Canvas shapes without migrating their metadata", () => {
     assert.throws(() => compileCanvas(choiceCanvas, variables), /Obsolete empathyChoiceIndex metadata is not supported/);
     assert.equal(JSON.stringify([oldChoice.getData(), oldChoiceEdge.getData()]), mixedChoiceSnapshot);
 
-    const say = node("say", EmpathyCanvasNodeKind.SAY, { text: "Combined old dialogue" });
+    const say = node("say", EmpathyCanvasNodeKind.SAY, {
+        text: "Combined old dialogue",
+        empathyCharacter: "Mara",
+    });
     const sayEnd = node("say-end", EmpathyCanvasNodeKind.END);
     const sayCanvas = graph(
         [entry, say, sayEnd],
         [new MockEdge("entry-say", entry, say), new MockEdge("say-end", say, sayEnd)],
     );
     const saySnapshot = JSON.stringify(say.getData());
-    assert.throws(() => compileCanvas(sayCanvas, variables), /SAY requires a non-empty character and dialogue/);
+    assert.throws(() => compileCanvas(sayCanvas, variables), /Obsolete empathyCharacter metadata is not supported/);
     assert.equal(JSON.stringify(say.getData()), saySnapshot);
 });
 
@@ -847,7 +869,7 @@ test("resolves Canvas references by name after variable reordering", () => {
 
 test("lowers ordered conditional edges and an else directly", () => {
     const entry = node("entry", EmpathyCanvasNodeKind.ENTRY);
-    const say = node("say", EmpathyCanvasNodeKind.SAY, { text: "Can we trust it?", empathyCharacter: "Mara" });
+    const say = node("say", EmpathyCanvasNodeKind.SAY, { text: "Can we trust it?", empathyCharacterAtom: mara.atom.value });
     const lineA = node("line-a", EmpathyCanvasNodeKind.LINE, { text: "Yes." });
     const lineB = node("line-b", EmpathyCanvasNodeKind.LINE, { text: "Not yet." });
     const end = node("end", EmpathyCanvasNodeKind.END);
@@ -860,7 +882,7 @@ test("lowers ordered conditional edges and an else directly", () => {
             new MockEdge("random-z", say, lineA, { empathyCondition: condition, empathyConditionOrder: 0 }),
             new MockEdge("a-end", lineA, end), new MockEdge("b-end", lineB, end),
         ],
-    ), variables);
+    ), variables, [mara]);
     const instructions = decode(result.bytecode);
     const opcodes = instructions.map(({ opcode }) => opcode);
     assert.ok(opcodes.includes(EmpathyBytecodeOpcode.LOAD));
@@ -1198,7 +1220,7 @@ test("validates, compiles, and generates numeric enum members for unassigned ato
 test("repairs duplicated SAY and CHOICE identities and remaps duplicated edges", () => {
     const originalSay = node("original-say", EmpathyCanvasNodeKind.SAY, {
         text: "Hello",
-        empathyCharacter: "Mara",
+        empathyCharacterAtom: mara.atom.value,
         empathyLineAtom: { value: 20, key: "mara_hello" },
     });
     const duplicateSay = new MockNode("duplicate-say", originalSay.getData());
@@ -1216,10 +1238,128 @@ test("repairs duplicated SAY and CHOICE identities and remaps duplicated edges",
     assert.equal(repairDuplicatedNodeAtoms(canvas, duplicateChoice, known, allocate), true);
     assert.notDeepEqual(duplicateSay.getData().empathyLineAtom, originalSay.getData().empathyLineAtom);
     assert.equal(duplicateSay.getData().empathyLineAtom?.key, undefined);
+    assert.equal(duplicateSay.getData().empathyCharacterAtom, mara.atom.value);
     const duplicateOptions = duplicateChoice.getData().empathyChoices!;
     assert.deepEqual(duplicateOptions.map(({ atom }) => atom.value), [32, 33]);
     assert.deepEqual(duplicateOptions.map(({ atom }) => atom.key), [undefined, undefined]);
     assert.equal(duplicatedEdge.getData().empathyChoiceAtom, 32);
+});
+
+test("keeps shared CHARACTER identity stable across SAY order, additions, and definition edits", () => {
+    const entry = node("entry", EmpathyCanvasNodeKind.ENTRY);
+    const first = node("say-a", EmpathyCanvasNodeKind.SAY, { text: "A", empathyCharacterAtom: 12 });
+    const second = node("say-b", EmpathyCanvasNodeKind.SAY, { text: "B", empathyCharacterAtom: 12 });
+    const third = node("say-c", EmpathyCanvasNodeKind.SAY, { text: "C", empathyCharacterAtom: 12 });
+    const end = node("end", EmpathyCanvasNodeKind.END);
+    const initial = graph([entry, first, second, third, end], [
+        new MockEdge("entry-a", entry, first),
+        new MockEdge("a-b", first, second),
+        new MockEdge("b-c", second, third),
+        new MockEdge("c-end", third, end),
+    ]);
+    const initialResult = compileCanvas(initial, variables, [mara]);
+    assert.deepEqual(yieldedAtomValues(initialResult.bytecode, 1), [12, 12, 12]);
+    assert.deepEqual(initialResult.characters.map(({ value, key, text }) => ({ value, key, text })), [
+        { value: 12, key: "chr_mara", text: "Мара" },
+    ]);
+
+    const sasha: NarrativeCharacter = { atom: { value: 4, key: "sasha" }, name: "Саша" };
+    const earlier = node("say-earlier", EmpathyCanvasNodeKind.SAY, { text: "Earlier", empathyCharacterAtom: 4 });
+    const reordered = graph([third, entry, earlier, second, first, end], [
+        new MockEdge("entry-earlier", entry, earlier),
+        new MockEdge("earlier-a", earlier, first),
+        new MockEdge("a-b", first, second),
+        new MockEdge("b-c", second, third),
+        new MockEdge("c-end", third, end),
+    ]);
+    const withEarlierCharacter = compileCanvas(reordered, variables, [sasha, mara]);
+    assert.deepEqual(yieldedAtomValues(withEarlierCharacter.bytecode, 1), [4, 12, 12, 12]);
+    assert.deepEqual(withEarlierCharacter.characters.map(({ value }) => value), [4, 12]);
+
+    const renamed: NarrativeCharacter = { atom: { value: 12, key: "npc_mara" }, name: "Мара Волкова" };
+    const beforeRename = compileCanvas(initial, variables, [mara]);
+    const afterRename = compileCanvas(initial, variables, [renamed]);
+    assert.deepEqual(afterRename.bytecode, beforeRename.bytecode);
+    assert.deepEqual([first, second, third].map((say) => say.getData().empathyCharacterAtom), [12, 12, 12]);
+    assert.equal(afterRename.characters[0].value, 12);
+});
+
+test("deleting a shared character preserves explicit missing SAY references and blocks compilation", () => {
+    const entry = node("entry", EmpathyCanvasNodeKind.ENTRY);
+    const first = node("say-a", EmpathyCanvasNodeKind.SAY, { text: "A", empathyCharacterAtom: 12 });
+    const second = node("say-b", EmpathyCanvasNodeKind.SAY, { text: "B", empathyCharacterAtom: 12 });
+    const end = node("end", EmpathyCanvasNodeKind.END);
+    const canvas = graph([entry, first, second, end], [
+        new MockEdge("entry-a", entry, first),
+        new MockEdge("a-b", first, second),
+        new MockEdge("b-end", second, end),
+    ]);
+    assert.doesNotThrow(() => compileCanvas(canvas, variables, [mara]));
+    const issues = validateCanvas(canvas, variables, []);
+    assert.deepEqual(issues.filter(({ message }) => message.includes("missing CHARACTER atom 12")).map(({ nodeId }) => nodeId), [
+        "say-a",
+        "say-b",
+    ]);
+    assert.throws(() => compileCanvas(canvas, variables, []), /missing CHARACTER atom 12/);
+    assert.equal(first.getData().empathyCharacterAtom, 12);
+    assert.equal(second.getData().empathyCharacterAtom, 12);
+});
+
+test("creates a character with an allocated atom and selects it without requiring an ID", () => {
+    const existing: NarrativeCharacter[] = [{ atom: { value: 0 }, name: "Existing" }];
+    let nextValue = 0;
+    const created = createNarrativeCharacter("  Мара  ", existing, (type, usedValues) => {
+        assert.equal(type, AuthoredAtomType.CHARACTER);
+        const allocation = allocateAuthoredAtom(type, nextValue, usedValues);
+        nextValue = allocation.nextValue;
+        return allocation.atom;
+    });
+    assert.deepEqual(created, { atom: { value: 1 }, name: "Мара" });
+    const selected = selectNarrativeCharacter({
+        type: "text",
+        text: "Вышка всё ещё передаёт сигнал.",
+        empathyKind: EmpathyCanvasNodeKind.SAY,
+    }, created);
+    assert.equal(selected.empathyCharacterAtom, 1);
+    assert.equal(created.atom.key, undefined);
+    assert.equal(generatedAtomKey(AuthoredAtomType.CHARACTER, created.name, created.atom.value, new Set()), "mara");
+});
+
+test("shows every existing character before the SAY picker search is edited", () => {
+    const characters: NarrativeCharacter[] = [
+        { atom: { value: 4, key: "ded" }, name: "Дед" },
+        { atom: { value: 9, key: "avtomat" }, name: "Автомат" },
+    ];
+    assert.deepEqual(filterNarrativeCharacters(characters).map(({ name }) => name), ["Дед", "Автомат"]);
+    assert.deepEqual(filterNarrativeCharacters(characters, "авт").map(({ name }) => name), ["Автомат"]);
+    assert.deepEqual(filterNarrativeCharacters(characters, "ded").map(({ name }) => name), ["Дед"]);
+});
+
+test("validates CHARACTER definitions independently and reports active Canvas usages", () => {
+    const invalid = [
+        { atom: { value: 12, key: "mara" }, name: "Мара" },
+        { atom: { value: 12, key: "mara" }, name: "" },
+        { atom: { value: -1, key: "Not_ASCII" }, name: "Саша" },
+    ] as NarrativeCharacter[];
+    const messages = validateCharacterConfiguration(invalid).map(({ message }) => message);
+    assert.ok(messages.some((message) => message.includes("value 12 is duplicated")));
+    assert.ok(messages.some((message) => message.includes("key mara is duplicated")));
+    assert.ok(messages.some((message) => message.includes("requires a non-empty name")));
+    assert.ok(messages.some((message) => message.includes("invalid CHARACTER atom value")));
+    assert.ok(messages.some((message) => message.includes("invalid CHARACTER atom key")));
+
+    const first = node("say-a", EmpathyCanvasNodeKind.SAY, { text: "A", empathyCharacterAtom: 12 });
+    const second = node("say-b", EmpathyCanvasNodeKind.SAY, { text: "B", empathyCharacterAtom: 12 });
+    const canvas = graph([first, second], []);
+    assert.equal(characterUsageCount(canvas, 12), 2);
+    assert.deepEqual(collectCharacterAtoms([mara], canvas), [{
+        owner: "character",
+        type: AuthoredAtomType.CHARACTER,
+        value: 12,
+        key: "chr_mara",
+        text: "Мара",
+        usageCount: 2,
+    }]);
 });
 
 test("keeps sidebar atom source lookup stable across CHOICE reorder", () => {
@@ -1372,7 +1512,7 @@ test("writes readable UTF-8 literals for line, character, and choice header tabl
     const entry = node("entry", EmpathyCanvasNodeKind.ENTRY);
     const say = node("say", EmpathyCanvasNodeKind.SAY, {
         text: "Привет, Мара",
-        empathyCharacter: "塔はまだ信号を送っている",
+        empathyCharacterAtom: 12,
         empathyLineAtom: { value: 1482 },
     });
     const choiceNode = node("choice", EmpathyCanvasNodeKind.CHOICE, {
@@ -1386,16 +1526,42 @@ test("writes readable UTF-8 literals for line, character, and choice header tabl
             new MockEdge("say-choice", say, choiceNode),
             new MockEdge("choice-end", choiceNode, end, { empathyChoiceAtom: 73 }),
         ],
-    ), variables), "unicode");
+    ), variables, [{ atom: { value: 12, key: "tower" }, name: "塔はまだ信号を送っている" }]), "unicode");
     assert.ok(header.includes(`{UNICODE_LINE_1482, 0, ${escapeCStringUtf8("Привет, Мара")}}`));
-    assert.ok(header.includes(`    ${escapeCStringUtf8("塔はまだ信号を送っている")},`));
+    assert.ok(header.includes(`{UNICODE_CHARACTER_TOWER, "tower", ${escapeCStringUtf8("塔はまだ信号を送っている")}}`));
     assert.ok(header.includes(`{UNICODE_CHOICE_73, 0, ${escapeCStringUtf8("The water is rising 🌊")}}`));
-    assert.match(header, /typedef enum unicode_CharacterAtom_t[\s\S]*UNICODE_CHARACTER_0 = 0u/);
+    assert.match(header, /typedef enum unicode_CharacterAtom_t[\s\S]*UNICODE_CHARACTER_TOWER = 12u/);
     assert.doesNotMatch(header, /\\(?:320|321|343|345|351|360)/);
     const bytes = Buffer.from(header, "utf8");
     assert.ok(bytes.includes(Buffer.from("Привет, Мара", "utf8")));
     assert.ok(bytes.includes(Buffer.from("塔はまだ信号を送っている", "utf8")));
     assert.ok(bytes.includes(Buffer.from("The water is rising 🌊", "utf8")));
+});
+
+test("generates keyed and keyless CHARACTER constants at their persisted numeric values", () => {
+    const entry = node("entry", EmpathyCanvasNodeKind.ENTRY);
+    const say = node("say", EmpathyCanvasNodeKind.SAY, {
+        text: "Вышка всё ещё передаёт сигнал.",
+        empathyCharacterAtom: 12,
+        empathyLineAtom: { value: 100 },
+    });
+    const end = node("end", EmpathyCanvasNodeKind.END);
+    const characters: NarrativeCharacter[] = [
+        { atom: { value: 12, key: "chr_mara" }, name: "Мара" },
+        { atom: { value: 14 }, name: "Миша" },
+    ];
+    const result = compileCanvas(graph([entry, say, end], [
+        new MockEdge("entry-say", entry, say),
+        new MockEdge("say-end", say, end),
+    ]), variables, characters);
+    const header = generateHeader(result, "Story");
+    assert.match(header, /STORY_CHARACTER_CHR_MARA = 12u/);
+    assert.match(header, /STORY_CHARACTER_14 = 14u/);
+    assert.match(header, /#define STORY_CHARACTER_COUNT 2u/);
+    assert.match(header, /\{STORY_ATOM_TYPE_CHARACTER, 12u, 14u\}/);
+    assert.ok(header.includes(`{STORY_CHARACTER_CHR_MARA, "chr_mara", ${escapeCStringUtf8("Мара")}}`));
+    assert.ok(header.includes(`{STORY_CHARACTER_14, 0, ${escapeCStringUtf8("Миша")}}`));
+    assert.ok(Buffer.from(header, "utf8").includes(Buffer.from("Мара", "utf8")));
 });
 
 test("validates optional IDs only when present and scopes uniqueness to atom type", () => {
@@ -1647,7 +1813,7 @@ test("orders case-preserving header sections and emits only the Empathy include"
     assert.match(header, /typedef struct Radio_Story_QuestState[\s\S]*int32_t stage;[\s\S]*} Radio_Story_QuestState;/);
     for (const symbol of [
         "line_atoms",
-        "character_strings",
+        "character_atoms",
         "choice_atoms",
         "atom_types",
         "parameters",
@@ -1725,6 +1891,7 @@ test("converts nodes to SET metadata without retaining unrelated semantic fields
         text: "",
         empathyKind: EmpathyCanvasNodeKind.SAY,
         empathyCharacter: "Mara",
+        empathyCharacterAtom: 12,
         empathyEntryMatchValue: "12",
         empathyPortalId: "stale-portal",
         empathyPortalName: "Stale portal",
@@ -1732,6 +1899,7 @@ test("converts nodes to SET metadata without retaining unrelated semantic fields
     assert.equal(converted.empathyKind, EmpathyCanvasNodeKind.SET);
     assert.deepEqual(converted.empathyAssignments, [{ variable: "", operation: "=", literal: "" }]);
     assert.equal(converted.empathyCharacter, undefined);
+    assert.equal(converted.empathyCharacterAtom, undefined);
     assert.equal(converted.empathyEntryMatchValue, undefined);
     assert.equal(converted.empathyPortalId, undefined);
     assert.equal(converted.empathyPortalName, undefined);
